@@ -1,3 +1,4 @@
-flask
+streamlit
 pandas
-gunicorn
+gspread
+google-auth
