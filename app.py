@@ -1,33 +1,31 @@
-from flask import Flask, request, jsonify
-import pandas as pd
-from datetime import datetime
 import os
+import gspread
+from flask import Flask, request, jsonify
+from datetime import datetime
+from oauth2client.service_account import ServiceAccountCredentials
 
 app = Flask(__name__)
-LOG_FILE = "sales_log.csv"
 
-# Initialize log file if it doesn't exist
-if not os.path.exists(LOG_FILE):
-    pd.DataFrame(columns=['id', 'timestamp', 'name']).to_csv(LOG_FILE, index=False)
+# Google Sheets Setup
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+# You will store your credentials as a "Secret" in Render or in a file
+creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
+client = gspread.authorize(creds)
+sheet = client.open("Sales_Counter").sheet1
 
 @app.route('/ghl-webhook', methods=['POST'])
 def handle_webhook():
     data = request.json
-    contact_id = data.get('id')
     first_name = data.get('first_name', 'Unknown')
     last_name = data.get('last_name', 'Unknown')
     full_name = f"{first_name} {last_name}"
-    
-    # Capture current time in UTC
     timestamp = datetime.utcnow().isoformat()
-
-    # Save to local CSV
-    new_sale = pd.DataFrame([[contact_id, timestamp, full_name]], columns=['id', 'timestamp', 'name'])
-    new_sale.to_csv(LOG_FILE, mode='a', header=False, index=False)
     
-    print(f"✅ Sale Recorded: {full_name}")
+    # Append the row to Google Sheets
+    sheet.append_row([data.get('id'), timestamp, full_name])
+    
     return jsonify({"status": "success"}), 200
 
 if __name__ == '__main__':
-    # Run on port 5000
-    app.run(host='0.0.0.0', port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
