@@ -30,59 +30,36 @@ def get_sales_day_bounds():
     prev_start = curr_start - timedelta(days=1)
     return curr_start, prev_start, curr_start 
 
-def fetch_sales_data(start_time, end_time=None):
-    url = "https://services.leadconnectorhq.com/contacts/search"
-    all_contacts = []
-    status_msg = "Success"
-
-    for tag in TARGET_TAGS:
-        payload = {
-            "locationId": LOCATION_ID, 
-            "filters": [{"field": "tags", "operator": "eq", "value": tag}],
-            "pageLimit": 400 
-        }
-        try:
-            response = requests.post(url, json=payload, headers=HEADERS)
-            if response.status_code == 200:
-                contacts = response.json().get('contacts', [])
-                all_contacts.extend(contacts)
-            else:
-                status_msg = f"Error {response.status_code}"
-        except:
-            status_msg = "Connection Error"
-
-    valid_ids = set()
-    final_list = []
-    
-    for contact in all_contacts:
-        c_id = contact.get('id')
-        if not c_id or c_id in valid_ids: continue
+def get_local_sales(start_time, end_time=None):
+    """
+    Reads sales from Google Sheets and filters by the time the WEBHOOK was received,
+    not when the GHL contact was last modified.
+    """
+    try:
+        # Pull all data from the sheet
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
         
-        tags = [t.lower().strip() for t in contact.get('tags', []) if t]
-        if EXCLUDE_TAG.lower() in tags: continue
+        # Convert timestamp to proper UTC datetime
+        df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize('UTC')
         
-        updated_str = contact.get('dateUpdated', contact.get('updatedAt'))
-        if not updated_str: continue
-        
-        updated_dt = datetime.fromisoformat(updated_str.replace('Z', '+00:00'))
-
+        # Filter for the specific sales window (9am EST to 9am EST)
         if end_time:
-            if start_time <= updated_dt < end_time:
-                final_list.append(contact)
-                valid_ids.add(c_id)
+            mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time)
         else:
-            if updated_dt >= start_time:
-                final_list.append(contact)
-                valid_ids.add(c_id)
-                
-    # FIXED: Sorting logic to handle None values in lastName
-    def get_sort_key(x):
-        ln = x.get('lastName')
-        return ln.lower() if ln else ""
-
-    final_list.sort(key=get_sort_key)
-    
-    return final_list, status_msg
+            mask = (df['timestamp'] >= start_time)
+            
+        filtered_df = df[mask].copy()
+        
+        # Sort Alphabetically by Last Name
+        def get_last_name(name):
+            parts = str(name).split()
+            return parts[-1].lower() if len(parts) > 1 else str(name).lower()
+            
+        filtered_df['last_name_sort'] = filtered_df['name'].apply(get_last_name)
+        return filtered_df.sort_values('last_name_sort')
+    except Exception as e:
+        return pd.DataFrame()
 
 # --- INITIAL DATA PULL ---
 curr_start, prev_start, prev_end = get_sales_day_bounds()
@@ -120,60 +97,46 @@ debug_curr = col1.empty()
 debug_prev = col2.empty()
 
 # --- UPDATE LOOP ---
+# --- DASHBOARD UI ---
 while True:
     curr_start, prev_start, prev_end = get_sales_day_bounds()
-    current_sales, _ = fetch_sales_data(curr_start)
-    previous_sales, _ = fetch_sales_data(prev_start, prev_end)
+    df_curr = get_local_sales(curr_start)
+    df_prev = get_local_sales(prev_start, prev_end)
     
-    count_curr = len(current_sales)
-    count_prev = len(previous_sales)
+    count_curr = len(df_curr)
+    count_prev = len(df_prev)
+
+    # DYNAMIC BACKGROUND: Shifts to Gold at 35
+    bg_color = "#FFD700" if count_curr >= DAILY_GOAL else "#F5F5F5"
+    st.markdown(f"""<style>.stApp {{ background-color: {bg_color}; transition: 2s; }}</style>""", unsafe_allow_html=True)
+
+    # Header & Massive Number
+    st.markdown('<p class="label-font">SALES TODAY</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
     
-    # Check for Duplicates
-    curr_ids = {c.get('id') for c in current_sales}
-    prev_ids = {c.get('id') for c in previous_sales}
-    duplicates = curr_ids.intersection(prev_ids)
-    
-    # Display Display
-    main_container.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
+    # Progress Bar
     progress = min(count_curr / DAILY_GOAL, 1.0)
-    with progress_container:
-        st.progress(progress)
-        st.markdown(f"<center><b>Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
-    prev_container.markdown(f'<p class="prev-font">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
+    st.progress(progress)
+    st.markdown(f"<center><b>Goal: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
+
+    # Yesterday Stats & Clock
+    st.markdown(f'<p class="prev-font">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
     now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
-    update_time_container.markdown(f'<p class="update-font">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="update-font">Last Update: {now_est} EST</p>', unsafe_allow_html=True)
 
-    # Duplicate Warning Note
-    if duplicates:
-        dup_warning.error(f"⚠️ DUPLICATE DETECTED: {len(duplicates)} contact(s) appear on both lists. Verify if tags were updated twice.")
-    else:
-        dup_warning.empty()
-
-    if test_mode:
-        with debug_curr:
-            st.write("### Today's Sales (A-Z)")
-            if current_sales:
-                curr_details = ""
-                for c in current_sales:
-                    marker = "🚨" if c.get('id') in duplicates else "✔"
-                    curr_details += f"{marker} {c.get('firstName', '')} {c.get('lastName', 'Unknown')}  \n"
-                st.success(curr_details)
-            else:
-                st.info("No sales detected yet.")
-
-        with debug_prev:
-            st.write("### Yesterday's Sales (A-Z)")
-            if previous_sales:
-                prev_details = ""
-                for c in previous_sales:
-                    marker = "🚨" if c.get('id') in duplicates else "✔"
-                    prev_details += f"{marker} {c.get('firstName', '')} {c.get('lastName', 'Unknown')}  \n"
-                st.warning(prev_details)
-            else:
-                st.info("No sales found for yesterday.")
+    # Alphabetical Audit Lists
+    if st.checkbox("Show Audit Lists", value=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("### Today (A-Z)")
+            st.success("  \n".join([f"✔ {n}" for n in df_curr['name']]) if not df_curr.empty else "Waiting for sales...")
+        with col2:
+            st.write("### Yesterday (A-Z)")
+            st.warning("  \n".join([f"✔ {n}" for n in df_prev['name']]) if not df_prev.empty else "No sales recorded.")
 
     if count_curr >= DAILY_GOAL:
         st.balloons()
+        st.success("🔥 DAILY GOAL REACHED! 🔥")
 
-    time.sleep(60)
+    time.sleep(30) # iPad refreshes every 30 seconds
     st.rerun()
