@@ -4,77 +4,43 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
 
-# --- GOOGLE SHEETS AUTHENTICATION ---
+import streamlit as st
+import pandas as pd
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime, timedelta, timezone
+import time
+import json
+
+# --- 1. CONFIGURATION ---
+DAILY_GOAL = 35
+SHEET_NAME = "Sales_Counter" 
+
+# --- 2. AUTHENTICATION (Laptop & iPad Compatible) ---
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
     if "gcp_service_account" in st.secrets:
         try:
-            # We strip any accidental whitespace from the secret before loading
-            raw_json = st.secrets["gcp_service_account"].strip()
-            creds_info = json.loads(raw_json)
+            # Cleanly load the JSON from Streamlit Secrets
+            creds_info = json.loads(st.secrets["gcp_service_account"].strip())
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-        except json.JSONDecodeError as e:
-            st.error(f"❌ Secret Formatting Error: {e}")
+        except Exception as e:
+            st.error(f"❌ JSON Secret Error: {e}")
             st.stop()
     else:
-        creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
-        
+        # Local fallback for testing on your laptop
+        try:
+            creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
+        except Exception as e:
+            st.error("❌ google_creds.json not found locally.")
+            st.stop()
+            
     return gspread.authorize(creds)
 
-# Initialize the client and sheet
+# Initialize
 client = get_gspread_client()
-sheet = client.open("Sales_Counter").sheet1
-
-st.set_page_config(page_title="Live Sales Counter", layout="wide")
-
-# --- 2. DATA FETCHING FUNCTION ---
-def fetch_sales_data(start_time, end_time=None):
-    """
-    Queries Google Sheets for sales and filters by the webhook timestamp.
-    """
-    try:
-        # Pull all data from the sheet
-        data = sheet.get_all_records()
-        df = pd.DataFrame(data)
-        
-        if df.empty:
-            return [], "Success (No data)"
-            
-        # Convert timestamp to proper UTC datetime
-        df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize('UTC')
-        
-        # Filter for the specific sales window (14:00 UTC / 9am EST)
-        if end_time:
-            mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time)
-        else:
-            mask = (df['timestamp'] >= start_time)
-            
-        filtered_df = df[mask].copy()
-        
-        # Sort Alphabetically by Last Name safely
-        def get_last_name(name):
-            parts = str(name).split()
-            # Returns last word lowercased, or the whole name if single word
-            return parts[-1].lower() if len(parts) > 1 else str(name).lower()
-            
-        filtered_df['last_name_sort'] = filtered_df['name'].apply(get_last_name)
-        sorted_df = filtered_df.sort_values('last_name_sort')
-        
-        return sorted_df.to_dict('records'), "Success"
-    except Exception as e:
-        return [], str(e)
-
-def get_sales_day_bounds():
-    """Calculates the 14:00 UTC (9am EST) reset windows."""
-    now_utc = datetime.now(timezone.utc)
-    if now_utc.hour < 14:
-        curr_start = now_utc.replace(hour=14, minute=0, second=0, microsecond=0) - timedelta(days=1)
-    else:
-        curr_start = now_utc.replace(hour=14, minute=0, second=0, microsecond=0)
-    
-    prev_start = curr_start - timedelta(days=1)
-    return curr_start, prev_start, curr_start 
+sheet = client.open(SHEET_NAME).sheet1
 
 # --- 3. DYNAMIC UI & STYLING ---
 def apply_custom_styles(current_count):
