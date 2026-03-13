@@ -1,5 +1,4 @@
-streamlit
-pandas
+flask
 gspread
-google-auth
 oauth2client
+gunicorn
