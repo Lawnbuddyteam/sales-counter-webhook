@@ -90,6 +90,7 @@ def apply_custom_styles(current_count):
 
 st.markdown('<p class="label-font">LIVE SALES TODAY</p>', unsafe_allow_html=True)
 
+# These containers stay outside the loop to prevent flickering
 main_container = st.empty()
 progress_container = st.empty()
 prev_container = st.empty()
@@ -102,6 +103,7 @@ debug_curr = col1.empty()
 debug_prev = col2.empty()
 
 while True:
+    # 1. Fetch Data
     curr_start, prev_start, prev_end = get_sales_day_bounds()
     current_sales, _ = fetch_sales_data(curr_start)
     previous_sales, _ = fetch_sales_data(prev_start, prev_end)
@@ -109,22 +111,36 @@ while True:
     count_curr = len(current_sales)
     count_prev = len(previous_sales)
     
+    # 2. Update UI Styles
     apply_custom_styles(count_curr)
     
-# Update Main Display
+    # 3. Update Big Number
     main_container.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
     
-    # Force Progress Bar visibility even at 0
-    progress = float(min(count_curr / DAILY_GOAL, 1.0))
-    with progress_container:
-        st.progress(progress)
-        st.markdown(f"<center><b style='color:#1F4E78; font-size:20px;'>Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
+    # 4. UPDATED PROGRESS BAR SECTION (Paste starts here)
+    current_count_float = float(count_curr)
+    goal_float = float(DAILY_GOAL)
+    progress_val = min(current_count_float / goal_float, 1.0)
 
+    with progress_container:
+        st.write("") # Tiny spacer
+        st.progress(progress_val)
+        
+        label_color = "#2E7D32" if count_curr < DAILY_GOAL else "#FFD700"
+        st.markdown(
+            f"<center><b style='color:{label_color}; font-size:25px;'>"
+            f"Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", 
+            unsafe_allow_html=True
+        )
+    # (End of your new chunk)
+
+    # 5. Update Yesterday & Time
     prev_container.markdown(f'<p class="prev-font">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
 
     now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
     update_time_container.markdown(f'<p class="update-font">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
 
+    # 6. Update Audit Lists
     if test_mode:
         with debug_curr:
             st.write("### Today (A-Z)")
@@ -142,5 +158,6 @@ while True:
     if count_curr >= DAILY_GOAL:
         st.balloons()
 
+    # 7. Wait and Rerun
     time.sleep(60)
     st.rerun()
