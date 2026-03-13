@@ -7,7 +7,7 @@ import time
 import json
 
 # --- 1. CONFIGURATION ---
-DAILY_GOAL = 35
+DAILY_GOAL = 55
 SHEET_NAME = "Sales_Counter" 
 
 # --- 2. AUTHENTICATION ---
