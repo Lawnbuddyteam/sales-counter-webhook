@@ -2,20 +2,26 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime, timedelta, timezone
-import time
+import json
 
-# --- 1. CONFIGURATION & GOOGLE SHEETS SETUP ---
-DAILY_GOAL = 35
-# Replace with the name of your Google Sheet
-SHEET_NAME = "Sales_Counter" 
+# --- GOOGLE SHEETS AUTHENTICATION ---
+def get_gspread_client():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    
+    # Check if we are running on Streamlit Cloud
+    if "gcp_service_account" in st.secrets:
+        # Read from Streamlit Secrets (for iPad/Cloud)
+        creds_info = json.loads(st.secrets["gcp_service_account"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+    else:
+        # Read from local JSON file (for your Laptop)
+        creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
+        
+    return gspread.authorize(creds)
 
-# Setup Google Sheets Credentials
-# Ensure 'google_creds.json' is in the same folder as this script
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
-client = gspread.authorize(creds)
-sheet = client.open(SHEET_NAME).sheet1
+# Initialize the client and sheet
+client = get_gspread_client()
+sheet = client.open("Sales_Counter").sheet1
 
 st.set_page_config(page_title="Live Sales Counter", layout="wide")
 
