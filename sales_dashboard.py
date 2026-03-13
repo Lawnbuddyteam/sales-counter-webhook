@@ -20,27 +20,27 @@ SHEET_NAME = "Sales_Counter"
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    if "gcp_service_account" in st.secrets:
-        try:
-            # Cleanly load the JSON from Streamlit Secrets
+    try:
+        if "gcp_service_account" in st.secrets:
+            # Cloud/iPad Authentication
             creds_info = json.loads(st.secrets["gcp_service_account"].strip())
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-        except Exception as e:
-            st.error(f"❌ JSON Secret Error: {e}")
-            st.stop()
-    else:
-        # Local fallback for testing on your laptop
-        try:
+        else:
+            # Local Laptop Authentication
             creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
-        except Exception as e:
-            st.error("❌ google_creds.json not found locally.")
-            st.stop()
             
-    return gspread.authorize(creds)
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"🚨 Authentication Failed: {e}")
+        st.stop()
 
 # Initialize
-client = get_gspread_client()
-sheet = client.open(SHEET_NAME).sheet1
+try:
+    client = get_gspread_client()
+    sheet = client.open("Sales_Counter").sheet1
+except gspread.exceptions.APIError as e:
+    st.error(f"❌ Google API Error: Ensure Google Drive API is enabled and the Sheet is shared with your service account email. Detail: {e}")
+    st.stop()
 
 # --- 3. DYNAMIC UI & STYLING ---
 def apply_custom_styles(current_count):
