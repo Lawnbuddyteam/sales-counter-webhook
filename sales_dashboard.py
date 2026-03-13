@@ -2,12 +2,6 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import json
-
-import streamlit as st
-import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta, timezone
 import time
 import json
@@ -16,20 +10,75 @@ import json
 DAILY_GOAL = 35
 SHEET_NAME = "Sales_Counter" 
 
-# --- LAYER 2: GLOBAL DEFINITIONS ---
-SHEET_NAME = "Sales_Counter"
-client = get_gspread_client()
-sheet = client.open(SHEET_NAME).sheet1 # 'sheet' must be defined before the function uses it
+# --- 2. AUTHENTICATION (Laptop & iPad Compatible) ---
+def get_gspread_client():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    
+    try:
+        # Check if running on Streamlit Cloud (iPad)
+        if "gcp_service_account" in st.secrets:
+            creds_info = json.loads(st.secrets["gcp_service_account"].strip())
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        else:
+            # Fallback for local laptop testing
+            creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
+            
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"🚨 Authentication Failed: {e}")
+        st.stop()
 
-# --- LAYER 3: FUNCTION DEFINITIONS ---
+# Initialize Sheet Connection
+try:
+    client = get_gspread_client()
+    sheet = client.open(SHEET_NAME).sheet1
+except Exception as e:
+    st.error(f"❌ Google API Error: Check Drive API and Sheet Sharing. Detail: {e}")
+    st.stop()
+
+# --- 3. FUNCTION DEFINITIONS ---
+
 def fetch_sales_data(start_time, end_time=None):
-    # This function uses the 'sheet' variable defined above
-    data = sheet.get_all_records() 
-    # ... logic ...
-    return filtered_data
+    """Queries Google Sheets and filters by the webhook timestamp."""
+    try:
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        
+        if df.empty:
+            return [], "Success"
+            
+        df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize('UTC')
+        
+        if end_time:
+            mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time)
+        else:
+            mask = (df['timestamp'] >= start_time)
+            
+        filtered_df = df[mask].copy()
+        
+        def get_last_name(name):
+            parts = str(name).split()
+            return parts[-1].lower() if len(parts) > 1 else str(name).lower()
+            
+        filtered_df['last_name_sort'] = filtered_df['name'].apply(get_last_name)
+        sorted_df = filtered_df.sort_values('last_name_sort')
+        
+        return sorted_df.to_dict('records'), "Success"
+    except Exception as e:
+        return [], str(e)
+
+def get_sales_day_bounds():
+    """Calculates the 9am EST (14:00 UTC) reset windows."""
+    now_utc = datetime.now(timezone.utc)
+    if now_utc.hour < 14:
+        curr_start = now_utc.replace(hour=14, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    else:
+        curr_start = now_utc.replace(hour=14, minute=0, second=0, microsecond=0)
+    
+    prev_start = curr_start - timedelta(days=1)
+    return curr_start, prev_start, curr_start 
 
 def apply_custom_styles(current_count):
-    # Background turns Gold (#FFD700) when goal is hit
     bg_color = "#FFD700" if current_count >= DAILY_GOAL else "#F5F5F5"
     text_color = "#111111" if current_count >= DAILY_GOAL else "#2E7D32"
     
@@ -40,18 +89,17 @@ def apply_custom_styles(current_count):
         .prev-font {{ font-size:60px !important; color: #555555; text-align: center; margin-top: 20px; }}
         .label-font {{ font-size:40px !important; text-align: center; color: #1F4E78; margin-bottom: 0px; }}
         .update-font {{ font-size:18px !important; text-align: center; color: #666666; margin-top: 10px; }}
-        .stProgress > div > div > div > div {{ background-color: #2E7D32; }}
         </style>
         """, unsafe_allow_html=True)
 
 # --- 4. MAIN DASHBOARD LOOP ---
+
 st.markdown('<p class="label-font">LIVE SALES TODAY</p>', unsafe_allow_html=True)
 
 main_container = st.empty()
 progress_container = st.empty()
 prev_container = st.empty()
 update_time_container = st.empty()
-dup_warning = st.empty()
 
 st.divider()
 test_mode = st.checkbox("Show Detail Audit Lists", value=True)
@@ -62,68 +110,29 @@ debug_prev = col2.empty()
 while True:
     curr_start, prev_start, prev_end = get_sales_day_bounds()
     
-    current_sales, curr_status = fetch_sales_data(curr_start)
-    previous_sales, prev_status = fetch_sales_data(prev_start, prev_end)
+    current_sales, _ = fetch_sales_data(curr_start)
+    previous_sales, _ = fetch_sales_data(prev_start, prev_end)
     
     count_curr = len(current_sales)
     count_prev = len(previous_sales)
     
-    # Apply styling based on current count
     apply_custom_styles(count_curr)
     
-    # Check for Duplicates (IDs that appear in both lists)
-    curr_ids = {str(c.get('id')) for c in current_sales}
-    prev_ids = {str(c.get('id')) for c in previous_sales}
-    duplicates = curr_ids.intersection(prev_ids)
-
-    # Update Main Display
     main_container.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
     
-    # Update Progress Bar
     progress = min(count_curr / DAILY_GOAL, 1.0)
     with progress_container:
         st.progress(progress)
         st.markdown(f"<center><b>Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
 
-    # Yesterday Stats
     prev_container.markdown(f'<p class="prev-font">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
 
-    # Clock (EST is UTC-4)
     now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
     update_time_container.markdown(f'<p class="update-font">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
 
-    # Duplicate Warning
-    if duplicates:
-        dup_warning.error(f"⚠️ DUPLICATE DETECTED: {len(duplicates)} contact(s) on both lists.")
-    else:
-        dup_warning.empty()
-
-    # Audit Lists
     if test_mode:
         with debug_curr:
-            st.write("### Today's Sales (A-Z)")
-            if current_sales:
-                curr_text = ""
-                for c in current_sales:
-                    marker = "🚨" if str(c.get('id')) in duplicates else "✔"
-                    curr_text += f"{marker} {c.get('name', 'Unknown')}  \n"
-                st.success(curr_text)
-            else:
-                st.info("No sales recorded since 9am.")
-
+            st.write("### Today (A-Z)")
+            st.success("  \n".join([f"✔ {c['name']}" for c in current_sales]) if current_sales else "Waiting...")
         with debug_prev:
-            st.write("### Yesterday's Sales (A-Z)")
-            if previous_sales:
-                prev_text = ""
-                for c in previous_sales:
-                    marker = "🚨" if str(c.get('id')) in duplicates else "✔"
-                    prev_text += f"{marker} {c.get('name', 'Unknown')}  \n"
-                st.warning(prev_text)
-            else:
-                st.info("No sales found for yesterday.")
-
-    if count_curr >= DAILY_GOAL:
-        st.balloons()
-
-    time.sleep(60)
-    st.rerun()
+            st.
