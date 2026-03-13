@@ -8,13 +8,16 @@ import json
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    # Check if we are running on Streamlit Cloud
     if "gcp_service_account" in st.secrets:
-        # Read from Streamlit Secrets (for iPad/Cloud)
-        creds_info = json.loads(st.secrets["gcp_service_account"])
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        try:
+            # We strip any accidental whitespace from the secret before loading
+            raw_json = st.secrets["gcp_service_account"].strip()
+            creds_info = json.loads(raw_json)
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        except json.JSONDecodeError as e:
+            st.error(f"❌ Secret Formatting Error: {e}")
+            st.stop()
     else:
-        # Read from local JSON file (for your Laptop)
         creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
         
     return gspread.authorize(creds)
