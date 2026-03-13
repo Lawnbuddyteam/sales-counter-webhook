@@ -13,16 +13,14 @@ SHEET_NAME = "Sales_Counter"
 # --- 2. AUTHENTICATION (Laptop & iPad Compatible) ---
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    
     try:
-        # Check if running on Streamlit Cloud (iPad)
         if "gcp_service_account" in st.secrets:
+            # Cloud/iPad Authentication
             creds_info = json.loads(st.secrets["gcp_service_account"].strip())
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         else:
-            # Fallback for local laptop testing
+            # Local Laptop Authentication
             creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
-            
         return gspread.authorize(creds)
     except Exception as e:
         st.error(f"🚨 Authentication Failed: {e}")
@@ -43,10 +41,9 @@ def fetch_sales_data(start_time, end_time=None):
     try:
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
-        
         if df.empty:
             return [], "Success"
-            
+        
         df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize('UTC')
         
         if end_time:
@@ -62,7 +59,6 @@ def fetch_sales_data(start_time, end_time=None):
             
         filtered_df['last_name_sort'] = filtered_df['name'].apply(get_last_name)
         sorted_df = filtered_df.sort_values('last_name_sort')
-        
         return sorted_df.to_dict('records'), "Success"
     except Exception as e:
         return [], str(e)
@@ -74,19 +70,17 @@ def get_sales_day_bounds():
         curr_start = now_utc.replace(hour=14, minute=0, second=0, microsecond=0) - timedelta(days=1)
     else:
         curr_start = now_utc.replace(hour=14, minute=0, second=0, microsecond=0)
-    
     prev_start = curr_start - timedelta(days=1)
     return curr_start, prev_start, curr_start 
 
 def apply_custom_styles(current_count):
     bg_color = "#FFD700" if current_count >= DAILY_GOAL else "#F5F5F5"
     text_color = "#111111" if current_count >= DAILY_GOAL else "#2E7D32"
-    
     st.markdown(f"""
         <style>
         .stApp {{ background-color: {bg_color}; transition: background-color 2s ease; }}
-        .big-font {{ font-size:350px !important; font-weight: bold; color: {text_color}; text-align: center; line-height: 0.8; margin: 0px; }}
-        .prev-font {{ font-size:60px !important; color: #555555; text-align: center; margin-top: 20px; }}
+        .big-font {{ font-size:300px !important; font-weight: bold; color: {text_color}; text-align: center; line-height: 0.8; margin: 0px; }}
+        .prev-font {{ font-size:50px !important; color: #555555; text-align: center; margin-top: 20px; }}
         .label-font {{ font-size:40px !important; text-align: center; color: #1F4E78; margin-bottom: 0px; }}
         .update-font {{ font-size:18px !important; text-align: center; color: #666666; margin-top: 10px; }}
         </style>
@@ -109,7 +103,6 @@ debug_prev = col2.empty()
 
 while True:
     curr_start, prev_start, prev_end = get_sales_day_bounds()
-    
     current_sales, _ = fetch_sales_data(curr_start)
     previous_sales, _ = fetch_sales_data(prev_start, prev_end)
     
@@ -133,6 +126,19 @@ while True:
     if test_mode:
         with debug_curr:
             st.write("### Today (A-Z)")
-            st.success("  \n".join([f"✔ {c['name']}" for c in current_sales]) if current_sales else "Waiting...")
+            if current_sales:
+                st.success("  \n".join([f"✔ {c['name']}" for c in current_sales]))
+            else:
+                st.info("Waiting for first sale...")
         with debug_prev:
-            st.
+            st.write("### Yesterday (A-Z)")
+            if previous_sales:
+                st.warning("  \n".join([f"✔ {c['name']}" for c in previous_sales]))
+            else:
+                st.info("No data for yesterday.")
+
+    if count_curr >= DAILY_GOAL:
+        st.balloons()
+
+    time.sleep(60)
+    st.rerun()
