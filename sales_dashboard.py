@@ -16,31 +16,23 @@ import json
 DAILY_GOAL = 35
 SHEET_NAME = "Sales_Counter" 
 
-# --- 2. AUTHENTICATION (Laptop & iPad Compatible) ---
-def get_gspread_client():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    
-    try:
-        if "gcp_service_account" in st.secrets:
-            # Cloud/iPad Authentication
-            creds_info = json.loads(st.secrets["gcp_service_account"].strip())
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-        else:
-            # Local Laptop Authentication
-            creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
-            
-        return gspread.authorize(creds)
-    except Exception as e:
-        st.error(f"🚨 Authentication Failed: {e}")
-        st.stop()
+# --- LAYER 2: GLOBAL DEFINITIONS ---
+SHEET_NAME = "Sales_Counter"
+client = get_gspread_client()
+sheet = client.open(SHEET_NAME).sheet1 # 'sheet' must be defined before the function uses it
 
-# Initialize
-try:
-    client = get_gspread_client()
-    sheet = client.open("Sales_Counter").sheet1
-except gspread.exceptions.APIError as e:
-    st.error(f"❌ Google API Error: Ensure Google Drive API is enabled and the Sheet is shared with your service account email. Detail: {e}")
-    st.stop()
+# --- LAYER 3: FUNCTION DEFINITIONS ---
+def fetch_sales_data(start_time, end_time=None):
+    # This function uses the 'sheet' variable defined above
+    data = sheet.get_all_records() 
+    # ... logic ...
+    return filtered_data
+
+# --- LAYER 4: THE MAIN LOOP ---
+while True:
+    # Now when the script hits this line, it knows exactly what 'fetch_sales_data' is
+    current_sales, status = fetch_sales_data(curr_start) 
+    # ... UI code ...
 
 # --- 3. DYNAMIC UI & STYLING ---
 def apply_custom_styles(current_count):
