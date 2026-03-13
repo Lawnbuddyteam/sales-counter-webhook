@@ -28,13 +28,6 @@ def fetch_sales_data(start_time, end_time=None):
     # ... logic ...
     return filtered_data
 
-# --- LAYER 4: THE MAIN LOOP ---
-while True:
-    # Now when the script hits this line, it knows exactly what 'fetch_sales_data' is
-    current_sales, status = fetch_sales_data(curr_start) 
-    # ... UI code ...
-
-# --- 3. DYNAMIC UI & STYLING ---
 def apply_custom_styles(current_count):
     # Background turns Gold (#FFD700) when goal is hit
     bg_color = "#FFD700" if current_count >= DAILY_GOAL else "#F5F5F5"
