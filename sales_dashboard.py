@@ -111,12 +111,14 @@ while True:
     
     apply_custom_styles(count_curr)
     
+# Update Main Display
     main_container.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
     
-    progress = min(count_curr / DAILY_GOAL, 1.0)
+    # Force Progress Bar visibility even at 0
+    progress = float(min(count_curr / DAILY_GOAL, 1.0))
     with progress_container:
         st.progress(progress)
-        st.markdown(f"<center><b>Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
+        st.markdown(f"<center><b style='color:#1F4E78; font-size:20px;'>Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
 
     prev_container.markdown(f'<p class="prev-font">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
 
