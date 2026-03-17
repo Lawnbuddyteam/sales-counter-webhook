@@ -47,8 +47,8 @@ def fetch_sales_data(start_time, end_time=None):
 
 def get_sales_day_bounds():
     now_utc = datetime.now(timezone.utc)
-    curr_start = now_utc.replace(hour=14, minute=0, second=0, microsecond=0)
-    if now_utc.hour < 14: curr_start -= timedelta(days=1)
+    curr_start = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
+    if now_utc.hour < 13: curr_start -= timedelta(days=1)
     return curr_start, curr_start - timedelta(days=1), curr_start
 
 def apply_custom_styles(current_count):
