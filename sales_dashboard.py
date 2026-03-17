@@ -36,14 +36,25 @@ def fetch_sales_data(start_time, end_time=None):
         df = pd.DataFrame(data)
         if df.empty: return [], "Success"
         
+        # Convert and localize timestamps
         df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize('UTC')
-        mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time) if end_time else (df['timestamp'] >= start_time)
         
+        # Filter by date range
+        mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time) if end_time else (df['timestamp'] >= start_time)
         filtered_df = df[mask].copy()
-        filtered_df['last_name_sort'] = filtered_df['name'].apply(lambda x: str(x).split()[-1].lower() if len(str(x).split()) > 1 else str(x).lower())
+
+        # --- NEW: REMOVE DUPLICATES ---
+        # This keeps the first occurrence of a name and removes subsequent ones
+        filtered_df = filtered_df.drop_duplicates(subset=['name'], keep='first')
+        
+        # Create sorting column for names
+        filtered_df['last_name_sort'] = filtered_df['name'].apply(
+            lambda x: str(x).split()[-1].lower() if len(str(x).split()) > 1 else str(x).lower()
+        )
+        
         return filtered_df.sort_values('last_name_sort').to_dict('records'), "Success"
-    except:
-        return [], "Error"
+    except Exception as e:
+        return [], f"Error: {e}"
 
 def get_sales_day_bounds():
     now_utc = datetime.now(timezone.utc)
