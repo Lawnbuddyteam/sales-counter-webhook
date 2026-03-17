@@ -89,6 +89,7 @@ if 'celebrated' not in st.session_state:
 
 st.markdown('<p class="label-font">LIVE SALES TODAY</p>', unsafe_allow_html=True)
 
+# Use empty containers for live updates
 main_container = st.empty()
 progress_container = st.empty()
 prev_container = st.empty()
@@ -100,50 +101,52 @@ col1, col2 = st.columns(2)
 debug_curr = col1.empty()
 debug_prev = col2.empty()
 
-while True:
-    curr_start, prev_start, prev_end = get_sales_day_bounds()
-    current_sales, _ = fetch_sales_data(curr_start)
-    previous_sales, _ = fetch_sales_data(prev_start, prev_end)
-    
-    count_curr = len(current_sales)
-    count_prev = len(previous_sales)
-    
-    apply_custom_styles(count_curr)
-    
-    # Update Celebration
-    if count_curr >= DAILY_GOAL and not st.session_state.celebrated:
-        st.balloons()
-        st.session_state.celebrated = True
-    elif count_curr < DAILY_GOAL:
-        st.session_state.celebrated = False
+# REMOVED: while True loop. 
+# Streamlit will naturally run this once per "Refresh"
+curr_start, prev_start, prev_end = get_sales_day_bounds()
+current_sales, _ = fetch_sales_data(curr_start)
+previous_sales, _ = fetch_sales_data(prev_start, prev_end)
 
-    main_container.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
-    
-    progress_val = min(float(count_curr) / float(DAILY_GOAL), 1.0)
-    with progress_container:
-        st.write("")
-        st.progress(progress_val)
-        label_col = "#39FF14" if count_curr >= DAILY_GOAL else "#5D9CEC"
-        st.markdown(f"<center><b style='color:{label_col}; font-size:25px;'>Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
+count_curr = len(current_sales)
+count_prev = len(previous_sales)
 
-    prev_container.markdown(f'<p class="prev-font">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
+apply_custom_styles(count_curr)
 
-    now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
-    update_time_container.markdown(f'<p class="update-font">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
+# Update Celebration
+if count_curr >= DAILY_GOAL and not st.session_state.celebrated:
+    st.balloons()
+    st.session_state.celebrated = True
+elif count_curr < DAILY_GOAL:
+    st.session_state.celebrated = False
 
-    if test_mode:
-        with debug_curr:
-            st.markdown("<h3 style='color: #5D9CEC;'>Today (A-Z)</h3>", unsafe_allow_html=True)
-            if current_sales:
-                st.markdown("  \n".join([f"<span style='color:white; font-size:18px;'>✔ {c['name']}</span>" for c in current_sales]), unsafe_allow_html=True)
-            else:
-                st.info("Waiting for first sale...")
-        with debug_prev:
-            st.markdown("<h3 style='color: #888888;'>Yesterday (A-Z)</h3>", unsafe_allow_html=True)
-            if previous_sales:
-                st.markdown("  \n".join([f"<span style='color:#888888; font-size:18px;'>✔ {c['name']}</span>" for c in previous_sales]), unsafe_allow_html=True)
-            else:
-                st.info("No data for yesterday.")
+main_container.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
 
-    time.sleep(60)
-    st.rerun()
+progress_val = min(float(count_curr) / float(DAILY_GOAL), 1.0)
+with progress_container:
+    st.write("")
+    st.progress(progress_val)
+    label_col = "#39FF14" if count_curr >= DAILY_GOAL else "#5D9CEC"
+    st.markdown(f"<center><b style='color:{label_col}; font-size:25px;'>Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
+
+prev_container.markdown(f'<p class="prev-font">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
+
+now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
+update_time_container.markdown(f'<p class="update-font">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
+
+if test_mode:
+    with debug_curr:
+        st.markdown("<h3 style='color: #5D9CEC;'>Today (A-Z)</h3>", unsafe_allow_html=True)
+        if current_sales:
+            st.markdown("  \n".join([f"<span style='color:white; font-size:18px;'>✔ {c['name']}</span>" for c in current_sales]), unsafe_allow_html=True)
+        else:
+            st.info("Waiting for first sale...")
+    with debug_prev:
+        st.markdown("<h3 style='color: #888888;'>Yesterday (A-Z)</h3>", unsafe_allow_html=True)
+        if previous_sales:
+            st.markdown("  \n".join([f"<span style='color:#888888; font-size:18px;'>✔ {c['name']}</span>" for c in previous_sales]), unsafe_allow_html=True)
+        else:
+            st.info("No data for yesterday.")
+
+# Use Streamlit's built-in rerun feature every 60 seconds at the VERY end
+time.sleep(60)
+st.rerun()
