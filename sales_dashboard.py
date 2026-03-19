@@ -34,32 +34,46 @@ def fetch_sales_data(start_time, end_time=None):
     try:
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
-        if df.empty: return [], "Success"
         
-        # 1. Clean data: Strip spaces and standardize case for duplicate checking
-        # We create a temporary column to ensure we don't change the actual display name
-        df['name_clean'] = df['name'].astype(str).str.strip().str.lower()
+        if df.empty: 
+            return [], "Success"
         
-        # 2. Convert and localize timestamps
-        df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce') # Ensure it's numeric if needed
-        df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize('UTC')
+        # 1. Standardize Timestamps - Flexible conversion
+        # This handles strings, numbers, or objects automatically
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         
-        # 3. Filter by date range first
+        # Drop rows where timestamp couldn't be parsed to avoid errors
+        df = df.dropna(subset=['timestamp'])
+        
+        # Localize to UTC to match your bounds logic
+        if df['timestamp'].dt.tz is None:
+            df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
+        else:
+            df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
+        
+        # 2. Filter by date range
         mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time) if end_time else (df['timestamp'] >= start_time)
         filtered_df = df[mask].copy()
 
-        # 4. REMOVE DUPLICATES (Case-Insensitive)
-        # We keep the first occurrence based on the cleaned name
+        # 3. Clean names and remove duplicates
+        # We use .fillna('') so 'None' values don't break the .str methods
+        filtered_df['name_clean'] = filtered_df['name'].astype(str).fillna('').str.strip().str.lower()
+        
+        # Keep the first instance of a unique name
         filtered_df = filtered_df.drop_duplicates(subset=['name_clean'], keep='first')
         
-        # 5. Create sorting column for names (Last Name sorting)
+        # 4. Sorting logic
         filtered_df['last_name_sort'] = filtered_df['name'].apply(
             lambda x: str(x).split()[-1].lower() if len(str(x).split()) > 1 else str(x).lower()
         )
         
-        # Remove the temp cleaning column before returning
-        return filtered_df.drop(columns=['name_clean']).sort_values('last_name_sort').to_dict('records'), "Success"
+        # Clean up and return
+        result = filtered_df.sort_values('last_name_sort').to_dict('records')
+        return result, "Success"
+
     except Exception as e:
+        # If it fails, we show the error on the Streamlit UI for debugging
+        st.error(f"Fetch Error: {e}")
         return [], f"Error: {e}"
 
 def get_sales_day_bounds():
