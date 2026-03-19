@@ -36,23 +36,29 @@ def fetch_sales_data(start_time, end_time=None):
         df = pd.DataFrame(data)
         if df.empty: return [], "Success"
         
-        # Convert and localize timestamps
+        # 1. Clean data: Strip spaces and standardize case for duplicate checking
+        # We create a temporary column to ensure we don't change the actual display name
+        df['name_clean'] = df['name'].astype(str).str.strip().str.lower()
+        
+        # 2. Convert and localize timestamps
+        df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce') # Ensure it's numeric if needed
         df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize('UTC')
         
-        # Filter by date range
+        # 3. Filter by date range first
         mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time) if end_time else (df['timestamp'] >= start_time)
         filtered_df = df[mask].copy()
 
-        # --- NEW: REMOVE DUPLICATES ---
-        # This keeps the first occurrence of a name and removes subsequent ones
-        filtered_df = filtered_df.drop_duplicates(subset=['name'], keep='first')
+        # 4. REMOVE DUPLICATES (Case-Insensitive)
+        # We keep the first occurrence based on the cleaned name
+        filtered_df = filtered_df.drop_duplicates(subset=['name_clean'], keep='first')
         
-        # Create sorting column for names
+        # 5. Create sorting column for names (Last Name sorting)
         filtered_df['last_name_sort'] = filtered_df['name'].apply(
             lambda x: str(x).split()[-1].lower() if len(str(x).split()) > 1 else str(x).lower()
         )
         
-        return filtered_df.sort_values('last_name_sort').to_dict('records'), "Success"
+        # Remove the temp cleaning column before returning
+        return filtered_df.drop(columns=['name_clean']).sort_values('last_name_sort').to_dict('records'), "Success"
     except Exception as e:
         return [], f"Error: {e}"
 
