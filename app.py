@@ -30,27 +30,26 @@ except Exception as e:
 
 @app.route('/ghl-webhook', methods=['POST'])
 def handle_webhook():
-    # 1. Immediately acknowledge the data
-    data = request.json
-    if not data:
-        return jsonify({"error": "No data received"}), 400
-
-    # 2. Process data quickly
-    first_name = data.get('first_name', '')
-    last_name = data.get('last_name', '')
-    full_name = f"{first_name} {last_name}".strip() or "Unknown Name"
-    ghl_id = str(data.get('id', 'No ID'))
-    timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-
-    # 3. Post to Google Sheets
     try:
-        # Re-authorize if the connection has timed out
+        data = request.json
+        ghl_id = str(data.get('id', 'No ID'))
+        
+        # --- NEW: DEDUPLICATION CHECK ---
+        # Fetch only the ID column (Column A) to check for existence
+        existing_ids = sheet.col_values(1) 
+        if ghl_id in existing_ids:
+            return jsonify({"status": "ignored", "message": "Duplicate ID"}), 200
+        # --------------------------------
+
+        first_name = data.get('first_name', '')
+        last_name = data.get('last_name', '')
+        full_name = f"{first_name} {last_name}".strip() or "Unknown Name"
+        timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
         sheet.append_row([ghl_id, timestamp, full_name])
         return jsonify({"status": "success"}), 200
     except Exception as e:
-        # Log the error but don't let the response hang
-        print(f"Google Sheets Error: {e}")
-        return jsonify({"status": "partial_success", "error": str(e)}), 200
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
