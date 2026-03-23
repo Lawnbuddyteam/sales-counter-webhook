@@ -14,7 +14,6 @@ SHEET_NAME = "Sales_Counter"
 # --- 2. AUTHENTICATION (CACHED) ---
 @st.cache_resource
 def get_gspread_client():
-    """Caches the connection to prevent re-auth on every webhook hit"""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
         if "gcp_service_account" in st.secrets:
@@ -34,74 +33,50 @@ sheet = client.open(SHEET_NAME).sheet1
 # --- 3. AUDIO PROCESSING (CACHED) ---
 @st.cache_data
 def get_audio_base64(file_path):
-    """Encodes audio to base64 once and stores in memory to prevent timeouts"""
     try:
         with open(file_path, "rb") as f:
-            data = f.read()
-            return base64.b64encode(data).decode()
-    except Exception:
+            return base64.b64encode(f.read()).decode()
+    except:
         return None
 
 def trigger_sound(file_path):
-    """Plays cached audio immediately"""
     b64 = get_audio_base64(file_path)
     if b64:
-        md = f"""
-            <audio autoplay="true">
-            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-            </audio>
-            """
-        st.markdown(md, unsafe_allow_html=True)
+        st.markdown(
+            f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>',
+            unsafe_allow_html=True
+        )
 
 # --- 4. FUNCTION DEFINITIONS ---
-
 def fetch_sales_data(start_time, end_time=None):
     try:
-        # Optimization: Get all values but only process the tail for speed
         data = sheet.get_all_values()
-        df = pd.DataFrame(data[1:], columns=data[0])
-        
-        if df.empty: 
-            return [], "Success"
-        
-        # Limit processing to recent records to stay within 60s window
-        df = df.tail(150)
+        df = pd.DataFrame(data[1:], columns=data[0]).tail(150)
+        if df.empty: return [], "Success"
         
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         df = df.dropna(subset=['timestamp'])
-        
         if df['timestamp'].dt.tz is None:
             df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
         else:
             df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
-        
+            
         mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time) if end_time else (df['timestamp'] >= start_time)
         filtered_df = df[mask].copy()
-
         filtered_df['name_clean'] = filtered_df['name'].astype(str).fillna('').str.strip().str.lower()
         filtered_df = filtered_df.drop_duplicates(subset=['name_clean'], keep='first')
         
         filtered_df['last_name_sort'] = filtered_df['name'].apply(
             lambda x: str(x).split()[-1].lower() if len(str(x).split()) > 1 else str(x).lower()
         )
-        
         return filtered_df.sort_values('last_name_sort').to_dict('records'), "Success"
-
     except Exception as e:
-        st.error(f"Fetch Error: {e}")
-        return [], f"Error: {e}"
-
-def get_sales_day_bounds():
-    now_utc = datetime.now(timezone.utc)
-    curr_start = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
-    if now_utc.hour < 13: curr_start -= timedelta(days=1)
-    return curr_start, curr_start - timedelta(days=1), curr_start
+        return [], str(e)
 
 def apply_custom_styles(current_count):
     bg_color = "#0E1117" 
     text_color = "#39FF14" if current_count >= DAILY_GOAL else "#FFFFFF"
     glow = "0 0 20px #39FF14, 0 0 40px #39FF14" if current_count >= DAILY_GOAL else "none"
-    
     st.markdown(f"""
         <style>
         .stApp {{ background-color: {bg_color}; }}
@@ -117,36 +92,43 @@ def apply_custom_styles(current_count):
         </style>
         """, unsafe_allow_html=True)
 
-# --- 5. MAIN DASHBOARD LOOP ---
+# --- 5. SIDEBAR UTILITIES ---
+# This is placed here so it loads before the main count processing
+with st.sidebar:
+    st.markdown("### 🛠 Dashboard Tools")
+    st.write("Use these buttons to unlock iPad audio and verify connection.")
+    
+    if st.button("🔊 Test Cha-Ching"):
+        trigger_sound("cha-ching.mp3")
+        st.success("Cha-ching triggered!")
+        
+    if st.button("🏆 Test Champions"):
+        trigger_sound("champions.mp3")
+        st.success("Champions triggered!")
+        
+    st.divider()
+    if st.button("🔄 Manual Refresh"):
+        st.rerun()
 
-if 'last_count' not in st.session_state:
-    st.session_state.last_count = 0
-if 'celebrated' not in st.session_state:
-    st.session_state.celebrated = False
+# --- 6. MAIN DASHBOARD LOOP ---
+if 'last_count' not in st.session_state: st.session_state.last_count = 0
+if 'celebrated' not in st.session_state: st.session_state.celebrated = False
 
-st.markdown('<p class="label-font">LIVE SALES TODAY</p>', unsafe_allow_html=True)
+# Calculate Day Bounds
+now_utc = datetime.now(timezone.utc)
+curr_start = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
+if now_utc.hour < 13: curr_start -= timedelta(days=1)
+prev_start, prev_end = curr_start - timedelta(days=1), curr_start
 
-main_container = st.empty()
-progress_container = st.empty()
-prev_container = st.empty()
-update_time_container = st.empty()
-
-st.divider()
-test_mode = st.checkbox("Show Audit Lists", value=True)
-col1, col2 = st.columns(2)
-debug_curr = col1.empty()
-debug_prev = col2.empty()
-
-curr_start, prev_start, prev_end = get_sales_day_bounds()
+# Fetch Data
 current_sales, _ = fetch_sales_data(curr_start)
 previous_sales, _ = fetch_sales_data(prev_start, prev_end)
-
 count_curr = len(current_sales)
 count_prev = len(previous_sales)
 
 apply_custom_styles(count_curr)
 
-# --- OPTIMIZED SOUND TRIGGER ---
+# Trigger Sounds based on Count Increase
 if count_curr > st.session_state.last_count:
     if count_curr >= DAILY_GOAL and not st.session_state.celebrated:
         st.balloons()
@@ -156,38 +138,35 @@ if count_curr > st.session_state.last_count:
         trigger_sound("cha-ching.mp3")
 
 st.session_state.last_count = count_curr
+if count_curr < DAILY_GOAL: st.session_state.celebrated = False
 
-if count_curr < DAILY_GOAL:
-    st.session_state.celebrated = False
-
-# --- UI RENDERING ---
-main_container.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
+# UI Rendering
+st.markdown('<p class="label-font">LIVE SALES TODAY</p>', unsafe_allow_html=True)
+st.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
 
 progress_val = min(float(count_curr) / float(DAILY_GOAL), 1.0)
-with progress_container:
-    st.write("")
-    st.progress(progress_val)
-    label_col = "#39FF14" if count_curr >= DAILY_GOAL else "#5D9CEC"
-    st.markdown(f"<center><b style='color:{label_col}; font-size:25px;'>Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
+st.progress(progress_val)
+label_col = "#39FF14" if count_curr >= DAILY_GOAL else "#5D9CEC"
+st.markdown(f"<center><b style='color:{label_col}; font-size:25px;'>Goal Progress: {count_curr} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
 
-prev_container.markdown(f'<p class="prev-font">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
+st.markdown(f'<p class="prev-font">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
 
 now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
-update_time_container.markdown(f'<p class="update-font">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
+st.markdown(f'<p class="update-font">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
 
+# Audit Lists
+test_mode = st.checkbox("Show Audit Lists", value=True)
 if test_mode:
-    with debug_curr:
+    col1, col2 = st.columns(2)
+    with col1:
         st.markdown("<h3 style='color: #5D9CEC;'>Today (A-Z)</h3>", unsafe_allow_html=True)
         if current_sales:
             st.markdown("  \n".join([f"<span style='color:white; font-size:18px;'>✔ {c['name']}</span>" for c in current_sales]), unsafe_allow_html=True)
-        else:
-            st.info("Waiting for first sale...")
-    with debug_prev:
+    with col2:
         st.markdown("<h3 style='color: #888888;'>Yesterday (A-Z)</h3>", unsafe_allow_html=True)
         if previous_sales:
             st.markdown("  \n".join([f"<span style='color:#888888; font-size:18px;'>✔ {c['name']}</span>" for c in previous_sales]), unsafe_allow_html=True)
-        else:
-            st.info("No data for yesterday.")
 
+# Auto-rerun every 60 seconds
 time.sleep(60)
 st.rerun()
