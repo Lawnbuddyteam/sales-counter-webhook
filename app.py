@@ -34,33 +34,26 @@ def handle_webhook():
         data = request.json
         ghl_id = str(data.get('id', 'No ID'))
         
-        # Log the incoming ID to Render logs for debugging
-        print(f"Received Webhook for ID: {ghl_id}")
-
-        # Fetch only the ID column to check for duplicates
-        # Using col_values is slower but more accurate if the sheet is small
-        existing_ids = sheet.col_values(1) 
+        # --- COLUMN-SPECIFIC DEDUPLICATION ---
+        # Fetching Column 1 (Column A) specifically for IDs
+        all_ids = sheet.col_values(1) 
+        existing_ids = [str(i) for i in all_ids[-200:]] 
         
         if ghl_id in existing_ids:
-            print(f"ID {ghl_id} already exists. Skipping.")
+            print(f"ID {ghl_id} exists in Column A. Skipping.")
             return jsonify({"status": "ignored"}), 200
 
-        full_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
+        # Extract name from GHL data
+        full_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or "Unknown"
         timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-        # Force the append to the very next available row
+        # APPEND ORDER: [Col A, Col B, Col C]
         sheet.append_row([ghl_id, timestamp, full_name])
-        print(f"Successfully added {full_name} to sheet.")
         
         return jsonify({"status": "success"}), 200
     except Exception as e:
-        print(f"CRITICAL ERROR: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 200
-
-    except Exception as e:
-        # If Google Sheets is slow, we STILL return 200 to stop GHL from retrying
-        print(f"Webhook Error: {e}")
-        return jsonify({"status": "error_but_received", "details": str(e)}), 200
+        print(f"Error: {e}")
+        return jsonify({"status": "error_but_received"}), 200
 
 # --- 3. SERVER START ---
 if __name__ == "__main__":
