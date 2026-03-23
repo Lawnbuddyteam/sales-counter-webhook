@@ -26,7 +26,6 @@ def get_gspread_client():
         st.error(f"🚨 Auth Failed: {e}")
         st.stop()
 
-# Initialize Sheet Connection
 client = get_gspread_client()
 sheet = client.open(SHEET_NAME).sheet1
 
@@ -42,6 +41,7 @@ def get_audio_base64(file_path):
 def trigger_sound(file_path):
     b64 = get_audio_base64(file_path)
     if b64:
+        # This hidden HTML element triggers the sound in the browser
         st.markdown(
             f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>',
             unsafe_allow_html=True
@@ -92,25 +92,7 @@ def apply_custom_styles(current_count):
         </style>
         """, unsafe_allow_html=True)
 
-# --- 5. SIDEBAR UTILITIES ---
-# This is placed here so it loads before the main count processing
-with st.sidebar:
-    st.markdown("### 🛠 Dashboard Tools")
-    st.write("Use these buttons to unlock iPad audio and verify connection.")
-    
-    if st.button("🔊 Test Cha-Ching"):
-        trigger_sound("cha-ching.mp3")
-        st.success("Cha-ching triggered!")
-        
-    if st.button("🏆 Test Champions"):
-        trigger_sound("champions.mp3")
-        st.success("Champions triggered!")
-        
-    st.divider()
-    if st.button("🔄 Manual Refresh"):
-        st.rerun()
-
-# --- 6. MAIN DASHBOARD LOOP ---
+# --- 5. MAIN DASHBOARD LOOP ---
 if 'last_count' not in st.session_state: st.session_state.last_count = 0
 if 'celebrated' not in st.session_state: st.session_state.celebrated = False
 
@@ -167,6 +149,6 @@ if test_mode:
         if previous_sales:
             st.markdown("  \n".join([f"<span style='color:#888888; font-size:18px;'>✔ {c['name']}</span>" for c in previous_sales]), unsafe_allow_html=True)
 
-# Auto-rerun every 60 seconds
+# Auto-rerun loop
 time.sleep(60)
 st.rerun()
