@@ -5,6 +5,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta, timezone
 import time
 import json
+import base64
 
 # --- 1. CONFIGURATION ---
 DAILY_GOAL = 70
@@ -30,49 +31,38 @@ sheet = client.open(SHEET_NAME).sheet1
 
 # --- 3. FUNCTION DEFINITIONS ---
 
+def autoplay_audio(file_path):
+    """Helper to play audio without showing the player UI"""
+    with open(file_path, "rb") as f:
+        data = f.read()
+        b64 = base64.b64encode(data).decode()
+        md = f"""
+            <audio autoplay="true">
+            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+            </audio>
+            """
+        st.markdown(md, unsafe_allow_html=True)
+
 def fetch_sales_data(start_time, end_time=None):
     try:
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
-        
-        if df.empty: 
-            return [], "Success"
-        
-        # 1. Standardize Timestamps - Flexible conversion
-        # This handles strings, numbers, or objects automatically
+        if df.empty: return [], "Success"
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-        
-        # Drop rows where timestamp couldn't be parsed to avoid errors
         df = df.dropna(subset=['timestamp'])
-        
-        # Localize to UTC to match your bounds logic
         if df['timestamp'].dt.tz is None:
             df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
         else:
             df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
-        
-        # 2. Filter by date range
         mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time) if end_time else (df['timestamp'] >= start_time)
         filtered_df = df[mask].copy()
-
-        # 3. Clean names and remove duplicates
-        # We use .fillna('') so 'None' values don't break the .str methods
         filtered_df['name_clean'] = filtered_df['name'].astype(str).fillna('').str.strip().str.lower()
-        
-        # Keep the first instance of a unique name
         filtered_df = filtered_df.drop_duplicates(subset=['name_clean'], keep='first')
-        
-        # 4. Sorting logic
         filtered_df['last_name_sort'] = filtered_df['name'].apply(
             lambda x: str(x).split()[-1].lower() if len(str(x).split()) > 1 else str(x).lower()
         )
-        
-        # Clean up and return
-        result = filtered_df.sort_values('last_name_sort').to_dict('records')
-        return result, "Success"
-
+        return filtered_df.sort_values('last_name_sort').to_dict('records'), "Success"
     except Exception as e:
-        # If it fails, we show the error on the Streamlit UI for debugging
         st.error(f"Fetch Error: {e}")
         return [], f"Error: {e}"
 
@@ -86,7 +76,6 @@ def apply_custom_styles(current_count):
     bg_color = "#0E1117" 
     text_color = "#39FF14" if current_count >= DAILY_GOAL else "#FFFFFF"
     glow = "0 0 20px #39FF14, 0 0 40px #39FF14" if current_count >= DAILY_GOAL else "none"
-    
     st.markdown(f"""
         <style>
         .stApp {{ background-color: {bg_color}; }}
@@ -104,12 +93,14 @@ def apply_custom_styles(current_count):
 
 # --- 4. MAIN DASHBOARD LOOP ---
 
+# Initialize state variables
+if 'last_count' not in st.session_state:
+    st.session_state.last_count = 0
 if 'celebrated' not in st.session_state:
     st.session_state.celebrated = False
 
 st.markdown('<p class="label-font">LIVE SALES TODAY</p>', unsafe_allow_html=True)
 
-# Use empty containers for live updates
 main_container = st.empty()
 progress_container = st.empty()
 prev_container = st.empty()
@@ -121,8 +112,6 @@ col1, col2 = st.columns(2)
 debug_curr = col1.empty()
 debug_prev = col2.empty()
 
-# REMOVED: while True loop. 
-# Streamlit will naturally run this once per "Refresh"
 curr_start, prev_start, prev_end = get_sales_day_bounds()
 current_sales, _ = fetch_sales_data(curr_start)
 previous_sales, _ = fetch_sales_data(prev_start, prev_end)
@@ -132,13 +121,25 @@ count_prev = len(previous_sales)
 
 apply_custom_styles(count_curr)
 
-# Update Celebration
+# --- SOUND LOGIC ---
+# 1. Check for "Cha-ching" (Count increased but goal not yet reached)
+if count_curr > st.session_state.last_count and count_curr < DAILY_GOAL:
+    autoplay_audio("cha-ching.mp3")
+
+# 2. Check for "Champions" (Goal reached for the first time)
 if count_curr >= DAILY_GOAL and not st.session_state.celebrated:
     st.balloons()
+    autoplay_audio("champions.mp3")
     st.session_state.celebrated = True
-elif count_curr < DAILY_GOAL:
+
+# Update last_count state for the next rerun
+st.session_state.last_count = count_curr
+
+# Reset celebration if count drops below goal (due to deletions)
+if count_curr < DAILY_GOAL:
     st.session_state.celebrated = False
 
+# --- UI RENDERING ---
 main_container.markdown(f'<p class="big-font">{count_curr}</p>', unsafe_allow_html=True)
 
 progress_val = min(float(count_curr) / float(DAILY_GOAL), 1.0)
@@ -167,6 +168,5 @@ if test_mode:
         else:
             st.info("No data for yesterday.")
 
-# Use Streamlit's built-in rerun feature every 60 seconds at the VERY end
 time.sleep(60)
 st.rerun()
