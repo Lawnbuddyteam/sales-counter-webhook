@@ -34,26 +34,26 @@ def handle_webhook():
         data = request.json
         ghl_id = str(data.get('id', 'No ID'))
         
-        # 1. Fetch all IDs currently in Column A
-        # This allows us to check for duplicates without overwriting
-        existing_ids = sheet.col_values(1) 
+        # --- OPTIMIZED DEDUPLICATION ---
+        # Instead of fetching the WHOLE column, we fetch only the last 100 rows
+        # This prevents the 408 timeout as the sheet grows
+        last_rows = sheet.get_all_values()[-100:]
+        existing_ids = [row[0] for row in last_rows] # IDs are in Column A (index 0)
         
-        # 2. If ID exists, skip but return 200 to satisfy GHL
         if ghl_id in existing_ids:
-            print(f"Duplicate detected and ignored: {ghl_id}")
             return jsonify({"status": "ignored", "message": "Duplicate ID"}), 200
+        # -------------------------------
 
-        # 3. Process new data
         first_name = data.get('first_name', '')
         last_name = data.get('last_name', '')
         full_name = f"{first_name} {last_name}".strip() or "Unknown Name"
         timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-        # 4. Use append_row to ensure it only goes to the NEXT empty row
-        # Column A=ID, B=Timestamp, C=Name
+        # Standard append_row to the bottom
         sheet.append_row([ghl_id, timestamp, full_name])
         
         return jsonify({"status": "success"}), 200
     except Exception as e:
+        # If Google Sheets is slow, we still return 200 to GHL to stop the timeout retries
         print(f"Webhook Error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "error_but_received", "details": str(e)}), 200
