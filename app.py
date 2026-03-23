@@ -63,6 +63,9 @@ def handle_webhook():
 
 # --- 3. SERVER START ---
 if __name__ == "__main__":
-    # Render requires the port to be dynamic via Environment Variables
+    # Render provides the port via an environment variable. 
+    # This MUST be dynamic to pass the Port Scan.
     port = int(os.environ.get("PORT", 5000))
+    
+    # host='0.0.0.0' is required for Render to route external traffic
     app.run(host='0.0.0.0', port=port)
