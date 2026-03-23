@@ -51,7 +51,7 @@ def trigger_sound(file_path):
 def fetch_sales_data(start_time, end_time=None):
     try:
         data = sheet.get_all_values()
-        df = pd.DataFrame(data[1:], columns=data[0]).tail(150)
+        df = pd.DataFrame(data[1:], columns=data[0]).tail(500)
         if df.empty: return [], "Success"
         
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
