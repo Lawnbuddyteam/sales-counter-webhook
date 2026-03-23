@@ -32,23 +32,26 @@ except Exception as e:
 def handle_webhook():
     try:
         data = request.json
-        ghl_id = str(data.get('id', 'No ID'))
+        # GHL can send 'id' or 'contact_id'. We check both.
+        ghl_id = str(data.get('id') or data.get('contact_id') or 'Missing_ID')
         
-        # --- COLUMN-SPECIFIC DEDUPLICATION ---
-        # Fetching Column 1 (Column A) specifically for IDs
+        # 1. Fetch IDs from Column A
         all_ids = sheet.col_values(1) 
-        existing_ids = [str(i) for i in all_ids[-200:]] 
         
-        if ghl_id in existing_ids:
-            print(f"ID {ghl_id} exists in Column A. Skipping.")
+        # 2. Skip headers (Row 1) and check for actual duplicates
+        # We start check from index 1 to ignore the 'ID' header in Row 1
+        existing_ids = [str(i) for i in all_ids[1:]] 
+        
+        if ghl_id in existing_ids and ghl_id != 'Missing_ID':
+            print(f"Verified Duplicate: {ghl_id} found. Skipping.")
             return jsonify({"status": "ignored"}), 200
 
-        # Extract name from GHL data
         full_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or "Unknown"
         timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-        # APPEND ORDER: [Col A, Col B, Col C]
+        # Append to Col A (ID), Col B (Timestamp), Col C (Name)
         sheet.append_row([ghl_id, timestamp, full_name])
+        print(f"Successfully added: {full_name}")
         
         return jsonify({"status": "success"}), 200
     except Exception as e:
