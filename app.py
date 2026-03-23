@@ -34,12 +34,13 @@ def handle_webhook():
         data = request.json
         ghl_id = str(data.get('id', 'No ID'))
         
-        # --- NEW: DEDUPLICATION CHECK ---
-        # Fetch only the ID column (Column A) to check for existence
+        # --- DEDUPLICATION CHECK ---
+        # Fetch the first column (IDs) to see if we've already processed this
         existing_ids = sheet.col_values(1) 
         if ghl_id in existing_ids:
+            print(f"Duplicate ignored: {ghl_id}")
             return jsonify({"status": "ignored", "message": "Duplicate ID"}), 200
-        # --------------------------------
+        # ----------------------------
 
         first_name = data.get('first_name', '')
         last_name = data.get('last_name', '')
@@ -49,6 +50,7 @@ def handle_webhook():
         sheet.append_row([ghl_id, timestamp, full_name])
         return jsonify({"status": "success"}), 200
     except Exception as e:
+        print(f"Webhook Error: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
