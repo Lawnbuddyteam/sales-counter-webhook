@@ -45,8 +45,8 @@ def autoplay_audio(file_path):
 
 def fetch_sales_data(start_time, end_time=None):
     try:
-        data = sheet.get_all_records()
-        df = pd.DataFrame(data)
+        data = sheet.get_all_values()
+        df = pd.DataFrame(data[1:], columns=data[0]).tail(100)
         if df.empty: return [], "Success"
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         df = df.dropna(subset=['timestamp'])
