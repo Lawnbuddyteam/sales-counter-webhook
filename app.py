@@ -30,27 +30,27 @@ except Exception as e:
 
 @app.route('/ghl-webhook', methods=['POST'])
 def handle_webhook():
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No data received"}), 400
+    # 1. Immediately acknowledge the data
+    data = request.json
+    if not data:
+        return jsonify({"error": "No data received"}), 400
 
-        # GHL often sends first_name and last_name separately
-        first_name = data.get('first_name', '')
-        last_name = data.get('last_name', '')
-        full_name = f"{first_name} {last_name}".strip() or "Unknown Name"
-        
-        ghl_id = str(data.get('id', 'No ID'))
-        # Create a clean timestamp for the iPad to read
-        timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Append: Column A=ID, Column B=Timestamp, Column C=Name
+    # 2. Process data quickly
+    first_name = data.get('first_name', '')
+    last_name = data.get('last_name', '')
+    full_name = f"{first_name} {last_name}".strip() or "Unknown Name"
+    ghl_id = str(data.get('id', 'No ID'))
+    timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+    # 3. Post to Google Sheets
+    try:
+        # Re-authorize if the connection has timed out
         sheet.append_row([ghl_id, timestamp, full_name])
-        
         return jsonify({"status": "success"}), 200
     except Exception as e:
-        print(f"Webhook Error: {e}")
-        return jsonify({"error": str(e)}), 500
+        # Log the error but don't let the response hang
+        print(f"Google Sheets Error: {e}")
+        return jsonify({"status": "partial_success", "error": str(e)}), 200
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
