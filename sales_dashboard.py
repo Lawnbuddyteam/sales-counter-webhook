@@ -12,10 +12,11 @@ import base64
 # --- 1. CONFIGURATION ---
 DAILY_GOAL = 70
 SHEET_NAME = "Sales_Counter" 
-GHL_API_KEY = os.environ.get('GHL_API_KEY')
 LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 
-# --- 2. GHL V2 FETCH (WITH ERROR LOGGING) ---
+# LOOK FOR KEY IN TWO PLACES
+GHL_API_KEY = os.environ.get('GHL_API_KEY') or st.secrets.get('GHL_API_KEY')
+
 def get_live_ghl_count():
     if not GHL_API_KEY:
         return 0, "Missing API Key in Render"
@@ -28,7 +29,7 @@ def get_live_ghl_count():
 
     url = "https://services.leadconnectorhq.com/contacts/search"
     headers = {
-        "Authorization": f"Bearer {GHL_API_KEY}",
+        "Authorization": f"Bearer {GHL_API_KEY.strip()}",
         "Version": "2021-04-15",
         "Content-Type": "application/json"
     }
@@ -41,8 +42,8 @@ def get_live_ghl_count():
     
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=20)
-        if r.status_code != 200:
-            return 0, f"API Error {r.status_code}: {r.text[:50]}"
+        if r.status_code == 401: return 0, "Invalid/Expired Token"
+        if r.status_code != 200: return 0, f"Error {r.status_code}"
             
         contacts = r.json().get('contacts', [])
         valid_count = 0
@@ -53,51 +54,47 @@ def get_live_ghl_count():
                 if upd_str and datetime.fromisoformat(upd_str) >= start_time:
                     valid_count += 1
         return valid_count, "OK"
-    except Exception as e:
-        return 0, f"Conn Error: {str(e)[:30]}"
+    except:
+        return 0, "Connection Error"
 
-# --- 3. AUTH & DATA ---
-@st.cache_resource
-def get_gspread_client():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    try:
-        if "gcp_service_account" in st.secrets:
-            creds_info = json.loads(st.secrets["gcp_service_account"].strip())
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-        else:
-            creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
-        return gspread.authorize(creds)
-    except: return None
-
+# --- 2. AUTH & DATA (FORCED REFRESH) ---
 def fetch_sales_data(sheet, start_time, end_time=None):
     try:
-        # Clear cache to force fresh read from Google Sheets
+        # We don't use st.cache here so it pulls fresh every 60 seconds
         data = sheet.get_all_values()
         df = pd.DataFrame(data[1:], columns=data[0])
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         df = df.dropna(subset=['timestamp'])
         
-        # Localize to UTC for comparison
         if df['timestamp'].dt.tz is None:
             df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
         else:
             df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
             
         mask = (df['timestamp'] >= start_time) & (df['timestamp'] < end_time) if end_time else (df['timestamp'] >= start_time)
-        filtered = df[mask].drop_duplicates(subset=['name'])
-        return filtered.to_dict('records')
+        return df[mask].drop_duplicates(subset=['name']).to_dict('records')
     except: return []
 
-# --- 4. MAIN LOGIC ---
+# --- 3. MAIN UI ---
 st.set_page_config(layout="wide")
-client = get_gspread_client()
-if not client:
-    st.error("Google Auth Failed")
+
+# Google Auth
+@st.cache_resource
+def get_client():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds_json = os.environ.get('GCP_SERVICE_ACCOUNT') or st.secrets.get('gcp_service_account')
+    creds_info = json.loads(creds_json)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+    return gspread.authorize(creds)
+
+try:
+    gc = get_client()
+    sheet = gc.open(SHEET_NAME).sheet1
+except Exception as e:
+    st.error(f"Google Connection Failed: {e}")
     st.stop()
 
-sheet = client.open(SHEET_NAME).sheet1
-
-# Time Calculations
+# Time Windows
 now_utc = datetime.now(timezone.utc)
 if now_utc.hour >= 13:
     curr_start = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
@@ -105,24 +102,20 @@ else:
     curr_start = (now_utc - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
 prev_start, prev_end = curr_start - timedelta(days=1), curr_start
 
-# GET COUNTS
+# FETCH ALL
 count_curr, status = get_live_ghl_count()
 current_sales = fetch_sales_data(sheet, curr_start)
 previous_sales = fetch_sales_data(sheet, prev_start, prev_end)
-count_prev = len(previous_sales)
 
-# UI
-st.markdown(f'<p style="font-size:320px; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{count_curr}</p>', unsafe_allow_html=True)
-st.progress(min(count_curr/DAILY_GOAL, 1.0))
+# DISPLAY
+st.markdown(f'<p style="font-size:350px; text-align:center; color:white; font-weight:900; margin:0;">{count_curr}</p>', unsafe_allow_html=True)
 
-col1, col2 = st.columns(2)
-col1.metric("Today (Sheet)", len(current_sales))
-col2.metric("Yesterday (Sheet)", count_prev)
+c1, c2 = st.columns(2)
+c1.metric("Today (Sheet)", len(current_sales))
+c2.metric("Yesterday (Sheet)", len(previous_sales))
 
-# DEBUG INFO (Small at bottom)
 if status != "OK":
-    st.warning(f"GHL Status: {status}")
+    st.warning(f"GHL Debug: {status}")
 
-# AUTO-REFRESH
 time.sleep(60)
 st.rerun()
