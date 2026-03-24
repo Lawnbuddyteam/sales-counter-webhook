@@ -5,11 +5,53 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta, timezone
 import time
 import json
+import os
+import requests
 import base64
 
 # --- 1. CONFIGURATION ---
 DAILY_GOAL = 70
 SHEET_NAME = "Sales_Counter" 
+
+# --- 1. SECURE CONFIGURATION ---
+# This pulls the key you just added to Render's Environment Variables
+GHL_API_KEY = os.environ.get('GHL_API_KEY')
+LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
+
+def get_live_ghl_count():
+    if not GHL_API_KEY:
+        st.error("GHL_API_KEY not found in Render Environment Variables")
+        return 0
+    
+    # Calculate Today's Start (1 PM UTC / 9 AM EST)
+    now = datetime.now(timezone.utc)
+    start_time = now.replace(hour=13, minute=0, second=0, microsecond=0)
+    if now.hour < 13: start_time -= timedelta(days=1)
+    
+    url = "https://services.leadconnectorhq.com/contacts/search"
+    headers = {
+        "Authorization": f"Bearer {GHL_API_KEY}",
+        "Version": "2021-04-15",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "locationId": LOCATION_ID,
+        "filters": [{"field": "date_updated", "operator": "gte", "value": start_time.strftime("%Y-%m-%dT%H:%M:%S.000Z")}]
+    }
+    
+    try:
+        r = requests.post(url, headers=headers, json=payload)
+        if r.status_code == 200:
+            contacts = r.json().get('contacts', [])
+            # Filter for 'client' tag
+            clients = [c for c in contacts if "client" in [t.lower() for t in c.get('tags', [])]]
+            return len(clients)
+    except:
+        return 0
+    return 0
+
+# ... Rest of your Streamlit UI code ...
+# Use get_live_ghl_count() to update your big number
 
 # --- 2. AUTH & AUDIO ---
 @st.cache_resource
