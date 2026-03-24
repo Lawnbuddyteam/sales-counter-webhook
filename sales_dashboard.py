@@ -42,11 +42,13 @@ def trigger_sound(file_path):
     if b64:
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-# --- 3. DATA FETCHING & SORTING ---
+# --- 3. DATA FETCHING & HYBRID DEDUPLICATION ---
 def fetch_sales_data(sheet, start_time, end_time=None):
     try:
         data = sheet.get_all_values()
+        # Column A = ID, Column B = Timestamp, Column C = Name
         df = pd.DataFrame(data[1:], columns=data[0])
+        
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         df = df.dropna(subset=['timestamp'])
         
@@ -57,9 +59,19 @@ def fetch_sales_data(sheet, start_time, end_time=None):
             
         mask = (df['timestamp'] >= start_time) & (df['timestamp'] < (end_time if end_time else datetime.now(timezone.utc) + timedelta(days=1)))
         filtered_df = df[mask].copy()
-        
-        # Deduplicate by name
-        filtered_df = filtered_df.drop_duplicates(subset=['name'])
+
+        # --- HYBRID DEDUPE LOGIC ---
+        # 1. Create a "Unique Key" 
+        # If ID exists, use ID. If not, use Name + Date (to keep same-name people separate)
+        def create_key(row):
+            cid = str(row.get('id', '')).strip()
+            if cid and cid.lower() != "no id" and cid != "":
+                return cid
+            # Fallback: Name + YYYY-MM-DD
+            return f"{str(row['name']).strip()}_{row['timestamp'].strftime('%Y-%m-%d')}"
+
+        filtered_df['uid'] = filtered_df.apply(create_key, axis=1)
+        filtered_df = filtered_df.drop_duplicates(subset=['uid'])
         
         # Alphabetical Sort by Last Name
         def get_last_name(fullname):
@@ -74,7 +86,6 @@ def fetch_sales_data(sheet, start_time, end_time=None):
 # --- 4. MAIN UI ---
 st.set_page_config(layout="wide")
 
-# Custom CSS to force the progress bar to be Green
 st.markdown("""
     <style>
         .stProgress > div > div > div > div {
@@ -91,7 +102,6 @@ if client:
     try:
         sheet = client.open(SHEET_NAME).sheet1
         
-        # Time Windows (9 AM ET / 13:00 UTC)
         now_utc = datetime.now(timezone.utc)
         if now_utc.hour >= 13:
             curr_start = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
@@ -99,28 +109,23 @@ if client:
             curr_start = (now_utc - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
         prev_start, prev_end = curr_start - timedelta(days=1), curr_start
 
-        # Fetch Data
         current_sales = fetch_sales_data(sheet, curr_start)
         previous_sales = fetch_sales_data(sheet, prev_start, prev_end)
         
         display_count = len(current_sales)
         count_prev = len(previous_sales)
 
-        # --- 5. SOUND LOGIC ---
         if display_count > st.session_state.last_count and st.session_state.last_count > 0:
             trigger_sound("cha-ching.mp3")
         st.session_state.last_count = display_count
 
-        # --- 6. UI RENDERING ---
+        # RENDERING
         st.markdown('<p style="font-size:40px; text-align:center; color:#5D9CEC; font-weight:bold; margin-bottom:-20px;">LIVE SALES TODAY</p>', unsafe_allow_html=True)
         st.markdown(f'<p style="font-size:350px; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{display_count}</p>', unsafe_allow_html=True)
         
-        # Progress Bar - Green Glow with Label
-        progress_val = min(float(display_count) / float(DAILY_GOAL), 1.0)
-        st.progress(progress_val)
+        st.progress(min(float(display_count) / float(DAILY_GOAL), 1.0))
         st.markdown(f"<center><b style='color:#39FF14; font-size:25px;'>Goal Progress: {display_count}/{DAILY_GOAL}</b></center>", unsafe_allow_html=True)
         
-        # Yesterday Metric & Last Sync
         st.markdown(f'<p style="font-size:45px; color:#888888; text-align:center; font-weight:bold; margin-bottom:0;">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
         now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
         st.markdown(f'<p style="font-size:16px; text-align:center; color:#666666; margin-top:0;">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
