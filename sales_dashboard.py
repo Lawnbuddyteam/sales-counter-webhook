@@ -15,21 +15,24 @@ SHEET_NAME = "Sales_Counter"
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
 LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 
-# --- 2. GHL V2 LIVE FETCH (FIXED FOR 9 AM EST) ---
+# --- 2. GHL V2 LIVE FETCH (REFINED TIME WINDOW) ---
 def get_live_ghl_count():
     if not GHL_API_KEY:
         st.error("GHL_API_KEY not found in Render Environment Variables")
         return 0
     
-    # Calculate Today's Start (1 PM UTC / 9 AM EST)
+    # Calculate Today's Start (1 PM UTC / 9 AM EDT)
     now_utc = datetime.now(timezone.utc)
-    if now_utc.hour < 13:
-        start_time = (now_utc - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
-    else:
+    
+    # Rollover Logic: If current time is after 13:00 UTC, Today started at 13:00 UTC today.
+    # If before 13:00 UTC, Today started at 13:00 UTC yesterday.
+    if now_utc.hour >= 13:
         start_time = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
+    else:
+        start_time = (now_utc - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
 
-    # Fetch with a 1-hour buffer to ensure no records are missed due to server lag
-    fetch_buffer = start_time - timedelta(hours=1)
+    # We fetch EVERYTHING from the last 24 hours to ensure no 'edge cases' are missed by GHL's API
+    fetch_buffer = start_time - timedelta(hours=2) 
     
     url = "https://services.leadconnectorhq.com/contacts/search"
     headers = {
@@ -38,7 +41,6 @@ def get_live_ghl_count():
         "Content-Type": "application/json"
     }
     
-    # We use searchAfter for paginating beyond 100 if needed
     payload = {
         "locationId": LOCATION_ID,
         "pageLimit": 100,
@@ -51,7 +53,7 @@ def get_live_ghl_count():
         ]
     }
     
-    valid_contacts = []
+    all_batch_contacts = []
     try:
         while True:
             r = requests.post(url, headers=headers, json=payload, timeout=20)
@@ -59,23 +61,26 @@ def get_live_ghl_count():
             
             data = r.json()
             batch = data.get('contacts', [])
-            valid_contacts.extend(batch)
+            all_batch_contacts.extend(batch)
             
             next_page = data.get('meta', {}).get('nextPageId')
             if not next_page or not batch: break
             payload["searchAfter"] = next_page
 
-        # Final Python Filtering for 'Client' tag and precise Start Time
-        count = 0
-        for c in valid_contacts:
+        # --- PRECISE PYTHON FILTERING ---
+        valid_count = 0
+        for c in all_batch_contacts:
+            # 1. Check for 'client' tag (Case-insensitive)
             tags = [t.lower().strip() for t in c.get('tags', [])]
             if "client" in tags:
+                # 2. Precise Time Comparison
                 upd_str = c.get('updatedAt', '').replace('Z', '+00:00')
                 if upd_str:
                     upd_dt = datetime.fromisoformat(upd_str)
+                    # If updated strictly AFTER 9 AM ET today, count it
                     if upd_dt >= start_time:
-                        count += 1
-        return count
+                        valid_count += 1
+        return valid_count
     except:
         return 0
 
@@ -109,7 +114,7 @@ def trigger_sound(file_path):
 def fetch_sales_data(sheet, start_time, end_time=None):
     try:
         data = sheet.get_all_values()
-        df = pd.DataFrame(data[1:], columns=data[0]).tail(300)
+        df = pd.DataFrame(data[1:], columns=data[0]).tail(500)
         if df.empty: return []
         
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
@@ -134,7 +139,7 @@ def fetch_sales_data(sheet, start_time, end_time=None):
         return unique_df.sort_values('ln_key').to_dict('records')
     except: return []
 
-# --- 5. SESSION STATE & UI SETUP ---
+# --- 5. SESSION STATE & SETUP ---
 st.set_page_config(page_title="Sales Dashboard", layout="wide")
 
 if 'last_count' not in st.session_state: st.session_state.last_count = 0
@@ -144,14 +149,16 @@ placeholder = st.empty()
 client = get_gspread_client()
 sheet = client.open(SHEET_NAME).sheet1
 
-# Day Bounds (9 AM EST = 13:00 UTC)
+# Day Bounds (1 PM UTC / 9 AM ET)
 now_utc = datetime.now(timezone.utc)
-curr_start = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
-if now_utc.hour < 13: curr_start -= timedelta(days=1)
+if now_utc.hour >= 13:
+    curr_start = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
+else:
+    curr_start = (now_utc - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
 prev_start, prev_end = curr_start - timedelta(days=1), curr_start
 
-# Fetch Data
-count_curr = get_live_ghl_count() # THIS USES GHL LIVE DATA
+# Fetch Counts
+count_curr = get_live_ghl_count()
 current_sales = fetch_sales_data(sheet, curr_start)
 previous_sales = fetch_sales_data(sheet, prev_start, prev_end)
 count_prev = len(previous_sales)
@@ -162,7 +169,7 @@ if count_curr > st.session_state.last_count:
         st.balloons()
         trigger_sound("champions.mp3")
         st.session_state.celebrated = True
-    else:
+    elif st.session_state.last_count > 0: # Only cha-ching if it's a new sale after start
         trigger_sound("cha-ching.mp3")
 st.session_state.last_count = count_curr
 
