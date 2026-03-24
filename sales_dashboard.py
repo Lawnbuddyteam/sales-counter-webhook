@@ -15,31 +15,65 @@ SHEET_NAME = "Sales_Counter"
 LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
 
-# --- 2. GHL LIVE FETCH (FIXED FILTER) ---
+# --- 2. GHL LIVE FETCH (STABILIZED) ---
 def get_live_ghl_count():
     if not GHL_API_KEY: return 0
     token = GHL_API_KEY.strip()
     
-    now = datetime.now(timezone.utc)
-    if now.hour >= 13:
-        start_time = now.replace(hour=13, minute=0, second=0, microsecond=0)
+    # Calculate Today's Start (9 AM ET / 13:00 UTC)
+    now_utc = datetime.now(timezone.utc)
+    if now_utc.hour >= 13:
+        start_time = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
     else:
-        start_time = (now - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
+        start_time = (now_utc - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
 
     url = "https://services.leadconnectorhq.com/contacts/search"
-    headers = {"Authorization": f"Bearer {token}", "Version": "2021-04-15", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Version": "2021-04-15",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
     
-    # FIXED: 'updatedAt' is the correct GHL V2 field for 'gte' filters
+    # Payload using 'updatedAt' with the most compatible ISO format
     payload = {
         "locationId": LOCATION_ID,
-        "filters": [{"field": "updatedAt", "operator": "gte", "value": start_time.strftime("%Y-%m-%dT%H:%M:%S.000Z")}]
+        "pageLimit": 100,
+        "filters": [
+            {
+                "field": "updatedAt", 
+                "operator": "gte", 
+                "value": start_time.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+            }
+        ]
     }
     
     try:
-        r = requests.post(url, headers=headers, json=payload, timeout=10)
-        contacts = r.json().get('contacts', [])
-        # Count only if tagged with 'client'
-        return sum(1 for c in contacts if "client" in [t.lower() for t in c.get('tags', [])])
+        r = requests.post(url, headers=headers, json=payload, timeout=15)
+        if r.status_code == 200:
+            contacts = r.json().get('contacts', [])
+            # Count only contacts with the 'client' tag
+            count = 0
+            for c in contacts:
+                tags = [t.lower().strip() for t in c.get('tags', [])]
+                if "client" in tags:
+                    # Double-check the time in Python to be 100% safe
+                    upd_str = c.get('updatedAt', '').replace('Z', '+00:00')
+                    if upd_str and datetime.fromisoformat(upd_str) >= start_time:
+                        count += 1
+            return count
+        else:
+            # Fallback: If search fails, try a basic get for recent contacts
+            fallback_url = f"https://services.leadconnectorhq.com/contacts/?locationId={LOCATION_ID}&limit=50"
+            res = requests.get(fallback_url, headers=headers, timeout=10)
+            fb_contacts = res.json().get('contacts', [])
+            fb_count = 0
+            for c in fb_contacts:
+                tags = [t.lower().strip() for t in c.get('tags', [])]
+                upd_str = c.get('dateUpdated', '').replace('Z', '+00:00')
+                if "client" in tags and upd_str and datetime.fromisoformat(upd_str) >= start_time:
+                    fb_count += 1
+            return fb_count
     except:
         return 0
 
@@ -60,8 +94,9 @@ def get_gspread_client():
 @st.cache_data
 def get_audio_base64(file_path):
     try:
-        with open(file_path, "rb") as f:
-            return base64.b64encode(f.read()).decode()
+        if os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                return base64.b64encode(f.read()).decode()
     except: return None
 
 def trigger_sound(file_path):
@@ -117,7 +152,6 @@ if client:
     
     st.progress(min(float(live_count) / DAILY_GOAL, 1.0))
     
-    # Yesterday metric in Gray as requested
     st.markdown(f'<p style="font-size:45px; color:#888888; text-align:center; font-weight:bold;">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
 
     st.divider()
@@ -126,7 +160,7 @@ if client:
     with c1:
         st.markdown("<h3 style='color: white;'>New Sales:</h3>", unsafe_allow_html=True)
         for s in current_sales: st.markdown(f"<span style='color: white;'>✔ {s['name']}</span>", unsafe_allow_html=True)
-    with c2:
+    with col2 if 'col2' in locals() else c2: # Safety check for column reference
         st.markdown("<h3 style='color: #888888;'>Yesterday's Sales:</h3>", unsafe_allow_html=True)
         for s in previous_sales: st.markdown(f"<span style='color: #888888;'>• {s['name']}</span>", unsafe_allow_html=True)
 else:
