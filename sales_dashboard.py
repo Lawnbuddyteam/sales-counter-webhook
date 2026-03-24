@@ -14,31 +14,30 @@ DAILY_GOAL = 70
 SHEET_NAME = "Sales_Counter" 
 LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 
-# Pull GHL Key
+# Pull GHL Key from Render
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
 
-# --- 2. GOOGLE AUTH (MANUAL REBUILD) ---
+# --- 2. GOOGLE AUTH (FROM SINGLE JSON BLOCK) ---
 @st.cache_resource
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # Rebuild the JSON structure from individual Render variables
-        creds_dict = {
-            "type": os.environ.get("type", "service_account"),
-            "project_id": os.environ.get("project_id"),
-            "private_key_id": os.environ.get("private_key_id"),
-            "private_key": os.environ.get("private_key").replace('\\n', '\n'),
-            "client_email": os.environ.get("client_email"),
-            "client_id": os.environ.get("client_id"),
-            "auth_uri": os.environ.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
-            "token_uri": os.environ.get("token_uri", "https://oauth2.googleapis.com/token"),
-            "auth_provider_x509_cert_url": os.environ.get("auth_provider_x509_cert_url"),
-            "client_x509_cert_url": os.environ.get("client_x509_cert_url")
-        }
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        # Pull the big JSON string from Render
+        creds_json = os.environ.get('GCP_SERVICE_ACCOUNT')
+        if not creds_json:
+            st.error("GCP_SERVICE_ACCOUNT variable not found in Render.")
+            return None
+            
+        creds_info = json.loads(creds_json)
+        
+        # Ensure the private key handles newlines correctly
+        if 'private_key' in creds_info:
+            creds_info['private_key'] = creds_info['private_key'].replace('\\n', '\n')
+            
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"Auth Rebuild Failed: {e}")
+        st.error(f"Auth Failed: {e}")
         return None
 
 # --- 3. GHL FETCH ---
@@ -46,14 +45,18 @@ def get_live_ghl_count():
     if not GHL_API_KEY:
         return 0, "Missing GHL_API_KEY in Render"
     
+    # Clean the key in case user left quotes/braces in Render
+    clean_key = GHL_API_KEY.replace('{', '').replace('}', '').replace('"', '').replace("'", "").strip()
+    
     now_utc = datetime.now(timezone.utc)
-    # 9 AM EST = 13:00 UTC
-    start_time = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
-    if now_utc.hour < 13: start_time -= timedelta(days=1)
+    if now_utc.hour >= 13:
+        start_time = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
+    else:
+        start_time = (now_utc - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
 
     url = "https://services.leadconnectorhq.com/contacts/search"
     headers = {
-        "Authorization": f"Bearer {GHL_API_KEY.strip()}",
+        "Authorization": f"Bearer {clean_key}",
         "Version": "2021-04-15",
         "Content-Type": "application/json"
     }
@@ -65,12 +68,14 @@ def get_live_ghl_count():
     
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=15)
+        if r.status_code == 401: return 0, "Invalid GHL Token"
         if r.status_code != 200: return 0, f"GHL Error {r.status_code}"
         
         contacts = r.json().get('contacts', [])
         count = 0
         for c in contacts:
-            if "client" in [t.lower() for t in c.get('tags', [])]:
+            tags = [t.lower() for t in c.get('tags', [])]
+            if "client" in tags:
                 upd = c.get('updatedAt', '').replace('Z', '+00:00')
                 if upd and datetime.fromisoformat(upd) >= start_time:
                     count += 1
