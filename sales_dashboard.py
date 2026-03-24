@@ -15,44 +15,7 @@ SHEET_NAME = "Sales_Counter"
 LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
 
-# --- 2. GHL LIVE FETCH (RELIABLE GET METHOD) ---
-def get_live_ghl_count():
-    if not GHL_API_KEY: return 0
-    token = GHL_API_KEY.strip()
-    
-    # Calculate Today's Start (9 AM ET / 13:00 UTC)
-    now_utc = datetime.now(timezone.utc)
-    if now_utc.hour >= 13:
-        start_time = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
-    else:
-        start_time = (now_utc - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
-
-    # Use GET /contacts/ instead of POST /search for higher stability
-    url = f"https://services.leadconnectorhq.com/contacts/?locationId={LOCATION_ID}&limit=100"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Version": "2021-04-15",
-        "Accept": "application/json"
-    }
-    
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code != 200: return 0
-        
-        contacts = r.json().get('contacts', [])
-        valid_count = 0
-        for c in contacts:
-            tags = [t.lower().strip() for t in c.get('tags', [])]
-            # V2 GET returns 'dateUpdated'
-            upd_str = c.get('dateUpdated', '').replace('Z', '+00:00')
-            if "client" in tags and upd_str:
-                if datetime.fromisoformat(upd_str) >= start_time:
-                    valid_count += 1
-        return valid_count
-    except:
-        return 0
-
-# --- 3. AUTH & AUDIO ---
+# --- 2. AUTH & AUDIO ---
 @st.cache_resource
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -79,7 +42,7 @@ def trigger_sound(file_path):
     if b64:
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-# --- 4. DATA FETCHING ---
+# --- 3. DATA FETCHING & SORTING ---
 def fetch_sales_data(sheet, start_time, end_time=None):
     try:
         data = sheet.get_all_values()
@@ -93,11 +56,34 @@ def fetch_sales_data(sheet, start_time, end_time=None):
             df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
             
         mask = (df['timestamp'] >= start_time) & (df['timestamp'] < (end_time if end_time else datetime.now(timezone.utc) + timedelta(days=1)))
-        return df[mask].drop_duplicates(subset=['name']).to_dict('records')
-    except: return []
+        filtered_df = df[mask].copy()
+        
+        # Deduplicate by name
+        filtered_df = filtered_df.drop_duplicates(subset=['name'])
+        
+        # Alphabetical Sort by Last Name
+        def get_last_name(fullname):
+            parts = str(fullname).strip().split()
+            return parts[-1].lower() if len(parts) > 1 else str(fullname).lower()
+        
+        filtered_df['ln_key'] = filtered_df['name'].apply(get_last_name)
+        return filtered_df.sort_values('ln_key').to_dict('records')
+    except:
+        return []
 
-# --- 5. UI SETUP ---
+# --- 4. MAIN UI ---
 st.set_page_config(layout="wide")
+
+# Custom CSS to force the progress bar to be Green
+st.markdown("""
+    <style>
+        .stProgress > div > div > div > div {
+            background-color: #39FF14;
+            box-shadow: 0 0 10px #39FF14;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
 if 'last_count' not in st.session_state: st.session_state.last_count = 0
 
 client = get_gspread_client()
@@ -105,7 +91,7 @@ if client:
     try:
         sheet = client.open(SHEET_NAME).sheet1
         
-        # Calculate Times (9 AM ET / 13:00 UTC)
+        # Time Windows (9 AM ET / 13:00 UTC)
         now_utc = datetime.now(timezone.utc)
         if now_utc.hour >= 13:
             curr_start = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
@@ -113,27 +99,29 @@ if client:
             curr_start = (now_utc - timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
         prev_start, prev_end = curr_start - timedelta(days=1), curr_start
 
-        # FETCH DATA
-        live_count = get_live_ghl_count()
+        # Fetch Data
         current_sales = fetch_sales_data(sheet, curr_start)
         previous_sales = fetch_sales_data(sheet, prev_start, prev_end)
+        
+        display_count = len(current_sales)
         count_prev = len(previous_sales)
 
-        # --- 6. SOUND LOGIC ---
-        if live_count > st.session_state.last_count and st.session_state.last_count > 0:
+        # --- 5. SOUND LOGIC ---
+        if display_count > st.session_state.last_count and st.session_state.last_count > 0:
             trigger_sound("cha-ching.mp3")
-        st.session_state.last_count = live_count
+        st.session_state.last_count = display_count
 
-        # --- 7. UI RENDERING ---
+        # --- 6. UI RENDERING ---
         st.markdown('<p style="font-size:40px; text-align:center; color:#5D9CEC; font-weight:bold; margin-bottom:-20px;">LIVE SALES TODAY</p>', unsafe_allow_html=True)
-        st.markdown(f'<p style="font-size:320px; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{live_count}</p>', unsafe_allow_html=True)
+        st.markdown(f'<p style="font-size:350px; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{display_count}</p>', unsafe_allow_html=True)
         
-        st.progress(min(float(live_count) / DAILY_GOAL, 1.0))
+        # Progress Bar - Green Glow with Label
+        progress_val = min(float(display_count) / float(DAILY_GOAL), 1.0)
+        st.progress(progress_val)
+        st.markdown(f"<center><b style='color:#39FF14; font-size:25px;'>Goal Progress: {display_count}/{DAILY_GOAL}</b></center>", unsafe_allow_html=True)
         
-        # Yesterday Metric
+        # Yesterday Metric & Last Sync
         st.markdown(f'<p style="font-size:45px; color:#888888; text-align:center; font-weight:bold; margin-bottom:0;">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
-        
-        # Last Sync Time (Restored)
         now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
         st.markdown(f'<p style="font-size:16px; text-align:center; color:#666666; margin-top:0;">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
 
@@ -142,10 +130,12 @@ if client:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("<h3 style='color: white;'>New Sales:</h3>", unsafe_allow_html=True)
-            for s in current_sales: st.markdown(f"<span style='color: white;'>✔ {s['name']}</span>", unsafe_allow_html=True)
+            for s in current_sales: 
+                st.markdown(f"<span style='color: white;'>✔ {s['name']}</span>", unsafe_allow_html=True)
         with c2:
             st.markdown("<h3 style='color: #888888;'>Yesterday's Sales:</h3>", unsafe_allow_html=True)
-            for s in previous_sales: st.markdown(f"<span style='color: #888888;'>• {s['name']}</span>", unsafe_allow_html=True)
+            for s in previous_sales: 
+                st.markdown(f"<span style='color: #888888;'>• {s['name']}</span>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Display Error: {e}")
