@@ -104,7 +104,7 @@ if client:
         
         now_utc = datetime.now(timezone.utc)
         if now_utc.hour >= 12:
-            curr_start = now_utc.replace(hour=13, minute=0, second=0, microsecond=0)
+            curr_start = now_utc.replace(hour=12, minute=0, second=0, microsecond=0)
         else:
             curr_start = (now_utc - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
         prev_start, prev_end = curr_start - timedelta(days=1), curr_start
