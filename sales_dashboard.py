@@ -60,29 +60,6 @@ def fetch_sales_data(sheet, start_time, end_time=None):
         mask = (df['timestamp'] >= start_time) & (df['timestamp'] < (end_time if end_time else datetime.now(timezone.utc) + timedelta(days=1)))
         filtered_df = df[mask].copy()
 
-        # --- HYBRID DEDUPE LOGIC ---
-        # 1. Create a "Unique Key" 
-        # If ID exists, use ID. If not, use Name + Date (to keep same-name people separate)
-        def create_key(row):
-            cid = str(row.get('id', '')).strip()
-            if cid and cid.lower() != "no id" and cid != "":
-                return cid
-            # Fallback: Name + YYYY-MM-DD
-            return f"{str(row['name']).strip()}_{row['timestamp'].strftime('%Y-%m-%d')}"
-
-        filtered_df['uid'] = filtered_df.apply(create_key, axis=1)
-        filtered_df = filtered_df.drop_duplicates(subset=['uid'])
-        
-        # Alphabetical Sort by Last Name
-        def get_last_name(fullname):
-            parts = str(fullname).strip().split()
-            return parts[-1].lower() if len(parts) > 1 else str(fullname).lower()
-        
-        filtered_df['ln_key'] = filtered_df['name'].apply(get_last_name)
-        return filtered_df.sort_values('ln_key').to_dict('records')
-    except:
-        return []
-
 # --- 4. MAIN UI ---
 st.set_page_config(layout="wide")
 
