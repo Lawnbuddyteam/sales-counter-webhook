@@ -42,7 +42,7 @@ def trigger_sound(file_path):
     if b64:
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-# --- 3. DATA FETCHING (CONDITIONAL DEDUPLICATION) ---
+# --- 3. DATA FETCHING (CONDITIONAL DEDUPLICATION + SORTING) ---
 def fetch_sales_data(sheet, start_time, end_time=None):
     try:
         data = sheet.get_all_values()
@@ -60,24 +60,22 @@ def fetch_sales_data(sheet, start_time, end_time=None):
             df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
             
         # --- DEDUPLICATION LOGIC ---
-        # 1. Define the "Deduplication Start Date" (April 1, 2026)
         dedup_threshold = datetime(2026, 4, 1, tzinfo=timezone.utc)
-        
-        # 2. Split data: Legacy (Before April 1) vs Current (After April 1)
         legacy_df = df[df['timestamp'] < dedup_threshold].copy()
         current_df = df[df['timestamp'] >= dedup_threshold].copy()
-        
-        # 3. Deduplicate only the Current Data based on contact_id (Column A)
-        # We keep the first instance found after April 1st.
         current_df = current_df.drop_duplicates(subset=[df.columns[0]], keep='first')
-        
-        # 4. Recombine. Now, a duplicate from Legacy can exist alongside a Current entry.
         final_df = pd.concat([legacy_df, current_df])
         
         # --- PERIOD FILTERING ---
         cutoff = end_time if end_time else datetime.now(timezone.utc) + timedelta(days=1)
         mask = (final_df['timestamp'] >= start_time) & (final_df['timestamp'] < cutoff)
         filtered_df = final_df[mask].copy()
+
+        # --- ALPHABETICAL SORTING BY LAST NAME ---
+        # We split the name string and take the last element for the sort key
+        if not filtered_df.empty:
+            filtered_df['sort_name'] = filtered_df.iloc[:, 2].astype(str).apply(lambda x: x.split()[-1] if x.split() else "")
+            filtered_df = filtered_df.sort_values(by='sort_name', ascending=True)
 
         return filtered_df.to_dict('records')
 
@@ -145,12 +143,13 @@ if client:
         with c1:
             st.markdown("<h3 style='color: white;'>New Sales:</h3>", unsafe_allow_html=True)
             for s in current_sales: 
-                name_val = s.get('name', 'Unknown')
+                # Column C index is 2 in Python 0-indexing
+                name_val = s.get(list(s.keys())[2], 'Unknown')
                 st.markdown(f"<span style='color: white;'>✔ {name_val}</span>", unsafe_allow_html=True)
         with c2:
             st.markdown("<h3 style='color: #888888;'>Yesterday's Sales:</h3>", unsafe_allow_html=True)
             for s in previous_sales: 
-                name_val = s.get('name', 'Unknown')
+                name_val = s.get(list(s.keys())[2], 'Unknown')
                 st.markdown(f"<span style='color: #888888;'>• {name_val}</span>", unsafe_allow_html=True)
 
     except Exception as e:
