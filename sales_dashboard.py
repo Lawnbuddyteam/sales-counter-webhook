@@ -42,33 +42,43 @@ def trigger_sound(file_path):
     if b64:
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-# --- 3. DATA FETCHING (INCLUDES DUPLICATES) ---
+# --- 3. DATA FETCHING (CONDITIONAL DEDUPLICATION) ---
 def fetch_sales_data(sheet, start_time, end_time=None):
     try:
         data = sheet.get_all_values()
-        if len(data) < 2: return [] # Handle empty sheet
+        if len(data) < 2: return [] 
         
-        # Column A = ID, Column B = Timestamp, Column C = Name
+        # Column A = contact_id, Column B = timestamp, Column C = name
         df = pd.DataFrame(data[1:], columns=data[0])
         
-        # Clean and convert timestamps
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         df = df.dropna(subset=['timestamp'])
         
-        # Standardize to UTC for comparison
         if df['timestamp'].dt.tz is None:
             df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
         else:
             df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
             
-        # Define range
-        cutoff = end_time if end_time else datetime.now(timezone.utc) + timedelta(days=1)
+        # --- DEDUPLICATION LOGIC ---
+        # 1. Define the "Deduplication Start Date" (April 1, 2026)
+        dedup_threshold = datetime(2026, 4, 1, tzinfo=timezone.utc)
         
-        # Filter by time period
-        mask = (df['timestamp'] >= start_time) & (df['timestamp'] < cutoff)
-        filtered_df = df[mask].copy()
+        # 2. Split data: Legacy (Before April 1) vs Current (After April 1)
+        legacy_df = df[df['timestamp'] < dedup_threshold].copy()
+        current_df = df[df['timestamp'] >= dedup_threshold].copy()
+        
+        # 3. Deduplicate only the Current Data based on contact_id (Column A)
+        # We keep the first instance found after April 1st.
+        current_df = current_df.drop_duplicates(subset=[df.columns[0]], keep='first')
+        
+        # 4. Recombine. Now, a duplicate from Legacy can exist alongside a Current entry.
+        final_df = pd.concat([legacy_df, current_df])
+        
+        # --- PERIOD FILTERING ---
+        cutoff = end_time if end_time else datetime.now(timezone.utc) + timedelta(days=1)
+        mask = (final_df['timestamp'] >= start_time) & (final_df['timestamp'] < cutoff)
+        filtered_df = final_df[mask].copy()
 
-        # RETURN ALL ROWS (Deduplication Logic Removed)
         return filtered_df.to_dict('records')
 
     except Exception as e:
@@ -95,11 +105,9 @@ if 'last_count' not in st.session_state: st.session_state.last_count = 0
 client = get_gspread_client()
 if client:
     try:
-        # Open the sheet and get data
         sheet = client.open(SHEET_NAME).sheet1
         
         now_utc = datetime.now(timezone.utc)
-        # Determine current shift start (12:00 UTC)
         if now_utc.hour >= 12:
             curr_start = now_utc.replace(hour=12, minute=0, second=0, microsecond=0)
         else:
@@ -108,42 +116,35 @@ if client:
         prev_start = curr_start - timedelta(days=1)
         prev_end = curr_start
 
-        # Fetch Data
         current_sales = fetch_sales_data(sheet, curr_start)
         previous_sales = fetch_sales_data(sheet, prev_start, prev_end)
         
         display_count = len(current_sales)
         count_prev = len(previous_sales)
 
-        # Trigger Sound if count increases
         if display_count > st.session_state.last_count and st.session_state.last_count > 0:
             trigger_sound("cha-ching.mp3")
         st.session_state.last_count = display_count
 
-        # --- RENDERING ---
+        # RENDERING
         st.markdown('<p style="font-size:40px; text-align:center; color:#5D9CEC; font-weight:bold; margin-bottom:-20px;">LIVE SALES TODAY</p>', unsafe_allow_html=True)
         st.markdown(f'<p style="font-size:350px; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{display_count}</p>', unsafe_allow_html=True)
         
-        # Progress Bar
         progress_val = min(float(display_count) / float(DAILY_GOAL), 1.0)
         st.progress(progress_val)
         st.markdown(f"<center><b style='color:#39FF14; font-size:25px;'>Goal Progress: {display_count}/{DAILY_GOAL}</b></center>", unsafe_allow_html=True)
         
-        # Yesterday Stats
         st.markdown(f'<p style="font-size:45px; color:#888888; text-align:center; font-weight:bold; margin-bottom:0;">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
         
-        # Timestamp in EST
         now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
         st.markdown(f'<p style="font-size:16px; text-align:center; color:#666666; margin-top:0;">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
 
         st.divider()
         
-        # Detailed Lists
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("<h3 style='color: white;'>New Sales:</h3>", unsafe_allow_html=True)
             for s in current_sales: 
-                # Note: 'name' must match your column header exactly in Google Sheets
                 name_val = s.get('name', 'Unknown')
                 st.markdown(f"<span style='color: white;'>✔ {name_val}</span>", unsafe_allow_html=True)
         with c2:
@@ -155,8 +156,7 @@ if client:
     except Exception as e:
         st.error(f"Display Error: {e}")
 else:
-    st.error("Google Auth Failed. Check your GCP Service Account environment variable.")
+    st.error("Google Auth Failed.")
 
-# Refresh logic
 time.sleep(60)
 st.rerun()
