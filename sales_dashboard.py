@@ -42,10 +42,15 @@ def trigger_sound(file_path):
     if b64:
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-# --- 3. DATA FETCHING (TARGETED DEDUPLICATION) ---
-def fetch_sales_data(sheet, start_time, end_time=None):
+# --- 3. DATA FETCHING & PROCESSING (OPTIMIZED FOR RATE LIMITS) ---
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_all_sheet_data(_sheet):
+    """Fetches all sheet data and caches it for 60 seconds to prevent API limits."""
+    return _sheet.get_all_values()
+
+def process_sales_data(data, start_time, end_time=None):
     try:
-        data = sheet.get_all_values()
         if len(data) < 2: return [] 
         
         # Column A = contact_id, Column B = timestamp, Column C = name
@@ -68,7 +73,6 @@ def fetch_sales_data(sheet, start_time, end_time=None):
         
         # DEDUPLICATE ONLY CURRENT: 
         # This keeps the first time they sold AFTER April 1st.
-        # It ignores the fact that they might have sold in March.
         current_df = current_df.drop_duplicates(subset=[df.columns[0]], keep='first')
         
         # Combine them back
@@ -88,7 +92,7 @@ def fetch_sales_data(sheet, start_time, end_time=None):
         return filtered_df.to_dict('records')
 
     except Exception as e:
-        st.error(f"Data Fetch Error: {e}")
+        st.error(f"Data Processing Error: {e}")
         return []
 
 # --- 4. MAIN UI ---
@@ -122,8 +126,12 @@ if client:
         prev_start = curr_start - timedelta(days=1)
         prev_end = curr_start
 
-        current_sales = fetch_sales_data(sheet, curr_start)
-        previous_sales = fetch_sales_data(sheet, prev_start, prev_end)
+        # 1. Fetch the data ONCE using the cached API call
+        all_data = fetch_all_sheet_data(sheet)
+
+        # 2. Process the offline data twice for current and previous periods
+        current_sales = process_sales_data(all_data, curr_start)
+        previous_sales = process_sales_data(all_data, prev_start, prev_end)
         
         display_count = len(current_sales)
         count_prev = len(previous_sales)
