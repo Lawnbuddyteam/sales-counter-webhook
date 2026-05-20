@@ -10,7 +10,7 @@ import requests
 import base64
 
 # --- 1. CONFIGURATION ---
-DAILY_GOAL = 70
+DAILY_GOAL = 90
 SHEET_NAME = "Sales_Counter" 
 LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
