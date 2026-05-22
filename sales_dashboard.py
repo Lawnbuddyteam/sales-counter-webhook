@@ -42,21 +42,36 @@ def trigger_sound(file_path):
     if b64:
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-# --- 3. DATA FETCHING & PROCESSING (OPTIMIZED FOR RATE LIMITS) ---
+# --- 3. DATA FETCHING (WITH RETRIES & FALLBACKS) ---
 
-# Updated TTL to 120 seconds to align with the new 2-minute cycle
+def get_worksheet_with_retries(client, sheet_name):
+    """Attempts to open the worksheet with retries for transient API 500 errors."""
+    for attempt in range(3):
+        try:
+            return client.open(sheet_name).sheet1
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                raise e
+
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_all_sheet_data(_sheet):
-    """Fetches all sheet data and caches it for 120 seconds to prevent API limits."""
-    return _sheet.get_all_values()
+    """Fetches sheet data with a 3-attempt retry loop. Fails loud so Streamlit doesn't cache a failure."""
+    for attempt in range(3):
+        try:
+            return _sheet.get_all_values()
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                raise e
 
 def process_sales_data(data, start_time, end_time=None):
     try:
         if len(data) < 2: return [] 
         
-        # Column A = contact_id, Column B = timestamp, Column C = name
         df = pd.DataFrame(data[1:], columns=data[0])
-        
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         df = df.dropna(subset=['timestamp'])
         
@@ -65,33 +80,23 @@ def process_sales_data(data, start_time, end_time=None):
         else:
             df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
             
-        # --- TARGETED DEDUPLICATION LOGIC ---
         dedup_threshold = datetime(2026, 4, 1, tzinfo=timezone.utc)
         
-        # Split the master list
         legacy_df = df[df['timestamp'] < dedup_threshold].copy()
         current_df = df[df['timestamp'] >= dedup_threshold].copy()
         
-        # DEDUPLICATE ONLY CURRENT: 
-        # This keeps the first time they sold AFTER April 1st.
         current_df = current_df.drop_duplicates(subset=[df.columns[0]], keep='first')
-        
-        # Combine them back
         final_df = pd.concat([legacy_df, current_df])
         
-        # --- PERIOD FILTERING ---
         cutoff = end_time if end_time else datetime.now(timezone.utc) + timedelta(days=1)
         mask = (final_df['timestamp'] >= start_time) & (final_df['timestamp'] < cutoff)
         filtered_df = final_df[mask].copy()
 
-        # --- ALPHABETICAL SORTING BY LAST NAME ---
         if not filtered_df.empty:
-            # Sort by the last word in Column C (index 2)
             filtered_df['sort_name'] = filtered_df.iloc[:, 2].astype(str).apply(lambda x: x.split()[-1] if x.split() else "")
             filtered_df = filtered_df.sort_values(by='sort_name', ascending=True)
 
         return filtered_df.to_dict('records')
-
     except Exception as e:
         st.error(f"Data Processing Error: {e}")
         return []
@@ -116,7 +121,8 @@ if 'last_count' not in st.session_state: st.session_state.last_count = 0
 client = get_gspread_client()
 if client:
     try:
-        sheet = client.open(SHEET_NAME).sheet1
+        # Step A: Get sheet with retries
+        sheet = get_worksheet_with_retries(client, SHEET_NAME)
         
         now_utc = datetime.now(timezone.utc)
         if now_utc.hour >= 4:
@@ -127,10 +133,23 @@ if client:
         prev_start = curr_start - timedelta(days=1)
         prev_end = curr_start
 
-        # 1. Fetch the data ONCE using the cached API call
-        all_data = fetch_all_sheet_data(sheet)
+        # Step B: Fetch data with retries, and store it in session state
+        try:
+            fresh_data = fetch_all_sheet_data(sheet)
+            st.session_state.cached_sheet_data = fresh_data
+        except Exception:
+            # If Google completely fails, we silently pass and use the previous cycle's data
+            pass
+        
+        # Step C: Fallback check. If first-time load fails, wait and restart.
+        if 'cached_sheet_data' not in st.session_state:
+            st.warning("Google API is temporarily unavailable. Retrying connection...")
+            time.sleep(5)
+            st.rerun()
 
-        # 2. Process the offline data twice for current and previous periods
+        # Safely proceed with data
+        all_data = st.session_state.cached_sheet_data
+
         current_sales = process_sales_data(all_data, curr_start)
         previous_sales = process_sales_data(all_data, prev_start, prev_end)
         
@@ -180,11 +199,8 @@ else:
     st.error("Google Auth Failed.")
 
 # --- 5. DYNAMIC REFRESH SCHEDULING ---
-# Calculate current hour based on UTC-4 (EST/EDT)
 current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
 
-# Between 4:00 AM (4) and 5:59 PM (17), sleep 2 minutes
-# From 6:00 PM (18) to 3:59 AM (3), sleep 10 minutes (600 seconds) as a keep-alive heartbeat for Streamlit
 if 4 <= current_hour < 18:
     sleep_seconds = 120
 else:
