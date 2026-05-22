@@ -10,7 +10,7 @@ import requests
 import base64
 
 # --- 1. CONFIGURATION ---
-DAILY_GOAL = 90  # Updated to 90
+DAILY_GOAL = 90
 SHEET_NAME = "Sales_Counter" 
 LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
@@ -44,9 +44,10 @@ def trigger_sound(file_path):
 
 # --- 3. DATA FETCHING & PROCESSING (OPTIMIZED FOR RATE LIMITS) ---
 
-@st.cache_data(ttl=60, show_spinner=False)
+# Updated TTL to 120 seconds to align with the new 2-minute cycle
+@st.cache_data(ttl=120, show_spinner=False)
 def fetch_all_sheet_data(_sheet):
-    """Fetches all sheet data and caches it for 60 seconds to prevent API limits."""
+    """Fetches all sheet data and caches it for 120 seconds to prevent API limits."""
     return _sheet.get_all_values()
 
 def process_sales_data(data, start_time, end_time=None):
@@ -178,5 +179,16 @@ if client:
 else:
     st.error("Google Auth Failed.")
 
-time.sleep(60)
+# --- 5. DYNAMIC REFRESH SCHEDULING ---
+# Calculate current hour based on UTC-4 (EST/EDT)
+current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
+
+# Between 4:00 AM (4) and 5:59 PM (17), sleep 2 minutes
+# From 6:00 PM (18) to 3:59 AM (3), sleep 60 minutes
+if 4 <= current_hour < 18:
+    sleep_seconds = 120
+else:
+    sleep_seconds = 3600
+
+time.sleep(sleep_seconds)
 st.rerun()
