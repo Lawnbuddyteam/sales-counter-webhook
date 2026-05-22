@@ -10,7 +10,7 @@ import requests
 import base64
 
 # --- 1. CONFIGURATION ---
-DAILY_GOAL = 90
+DAILY_GOAL = 90  # Updated to 90
 SHEET_NAME = "Sales_Counter" 
 LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
@@ -136,8 +136,14 @@ if client:
         display_count = len(current_sales)
         count_prev = len(previous_sales)
 
+        # CELEBRATION LOGIC
         if display_count > st.session_state.last_count and st.session_state.last_count > 0:
-            trigger_sound("cha-ching.mp3")
+            if display_count >= DAILY_GOAL:
+                st.balloons()
+                trigger_sound("champions.mp3")
+            else:
+                trigger_sound("cha-ching.mp3")
+                
         st.session_state.last_count = display_count
 
         # RENDERING
