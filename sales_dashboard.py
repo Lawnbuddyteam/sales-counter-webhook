@@ -184,11 +184,11 @@ else:
 current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
 
 # Between 4:00 AM (4) and 5:59 PM (17), sleep 2 minutes
-# From 6:00 PM (18) to 3:59 AM (3), sleep 60 minutes
+# From 6:00 PM (18) to 3:59 AM (3), sleep 10 minutes (600 seconds) as a keep-alive heartbeat for Streamlit
 if 4 <= current_hour < 18:
     sleep_seconds = 120
 else:
-    sleep_seconds = 3600
+    sleep_seconds = 600
 
 time.sleep(sleep_seconds)
 st.rerun()
