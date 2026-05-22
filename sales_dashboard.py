@@ -9,6 +9,9 @@ import os
 import requests
 import base64
 
+# --- 0. PAGE CONFIG MUST BE FIRST ---
+st.set_page_config(layout="wide", page_title="Sales Dashboard")
+
 # --- 1. CONFIGURATION ---
 DAILY_GOAL = 90
 SHEET_NAME = "Sales_Counter" 
@@ -16,7 +19,8 @@ LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
 
 # --- 2. AUTH & AUDIO ---
-@st.cache_resource
+# Refresh the Google auth token every 30 mins to prevent silent token expiration
+@st.cache_resource(ttl=1800)
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_json = os.environ.get('gcp_service_account') or os.environ.get('GCP_SERVICE_ACCOUNT')
@@ -42,25 +46,12 @@ def trigger_sound(file_path):
     if b64:
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-# --- 3. DATA FETCHING (WITH RETRIES & FALLBACKS) ---
-
-def get_worksheet_with_retries(client, sheet_name):
-    """Attempts to open the worksheet with retries for transient API 500 errors."""
+# --- 3. DATA FETCHING (MANUAL CACHE) ---
+def get_fresh_data(sheet):
+    """Fetches sheet data with a 3-attempt retry loop."""
     for attempt in range(3):
         try:
-            return client.open(sheet_name).sheet1
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2)
-            else:
-                raise e
-
-@st.cache_data(ttl=120, show_spinner=False)
-def fetch_all_sheet_data(_sheet):
-    """Fetches sheet data with a 3-attempt retry loop. Fails loud so Streamlit doesn't cache a failure."""
-    for attempt in range(3):
-        try:
-            return _sheet.get_all_values()
+            return sheet.get_all_values()
         except Exception as e:
             if attempt < 2:
                 time.sleep(2)
@@ -69,7 +60,7 @@ def fetch_all_sheet_data(_sheet):
 
 def process_sales_data(data, start_time, end_time=None):
     try:
-        if len(data) < 2: return [] 
+        if not data or len(data) < 2: return [] 
         
         df = pd.DataFrame(data[1:], columns=data[0])
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
@@ -102,8 +93,6 @@ def process_sales_data(data, start_time, end_time=None):
         return []
 
 # --- 4. MAIN UI ---
-st.set_page_config(layout="wide", page_title="Sales Dashboard")
-
 st.markdown("""
     <style>
         .stProgress > div > div > div > div {
@@ -121,8 +110,8 @@ if 'last_count' not in st.session_state: st.session_state.last_count = 0
 client = get_gspread_client()
 if client:
     try:
-        # Step A: Get sheet with retries
-        sheet = get_worksheet_with_retries(client, SHEET_NAME)
+        # Step A: Get sheet
+        sheet = client.open(SHEET_NAME).sheet1
         
         now_utc = datetime.now(timezone.utc)
         if now_utc.hour >= 4:
@@ -133,21 +122,26 @@ if client:
         prev_start = curr_start - timedelta(days=1)
         prev_end = curr_start
 
-        # Step B: Fetch data with retries, and store it in session state
-        try:
-            fresh_data = fetch_all_sheet_data(sheet)
-            st.session_state.cached_sheet_data = fresh_data
-        except Exception:
-            # If Google completely fails, we silently pass and use the previous cycle's data
-            pass
+        # Step B: Manual 120-second Cache Enforcement
+        current_time = time.time()
+        needs_refresh = True
         
-        # Step C: Fallback check. If first-time load fails, wait and restart.
-        if 'cached_sheet_data' not in st.session_state:
-            st.warning("Google API is temporarily unavailable. Retrying connection...")
-            time.sleep(5)
-            st.rerun()
+        if 'cached_sheet_data' in st.session_state and 'last_fetch_time' in st.session_state:
+            # If less than 120 seconds have passed, skip the API call
+            if current_time - st.session_state.last_fetch_time < 120:
+                needs_refresh = False
 
-        # Safely proceed with data
+        if needs_refresh:
+            try:
+                st.session_state.cached_sheet_data = get_fresh_data(sheet)
+                st.session_state.last_fetch_time = current_time
+            except Exception as e:
+                if 'cached_sheet_data' not in st.session_state:
+                    st.error(f"Google API is down. Retrying in 5 seconds... (Error: {e})")
+                    time.sleep(5)
+                    st.rerun()
+
+        # Step C: Use the securely cached data
         all_data = st.session_state.cached_sheet_data
 
         current_sales = process_sales_data(all_data, curr_start)
@@ -196,7 +190,7 @@ if client:
     except Exception as e:
         st.error(f"Display Error: {e}")
 else:
-    st.error("Google Auth Failed.")
+    st.error("Google Auth Failed. Please check service account credentials.")
 
 # --- 5. DYNAMIC REFRESH SCHEDULING ---
 current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
