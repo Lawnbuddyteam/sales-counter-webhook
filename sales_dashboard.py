@@ -46,7 +46,6 @@ def trigger_sound(file_path):
 
 # --- 3. DATA FETCHING ---
 def get_fresh_data(sheet):
-    """Fetches sheet data with a 3-attempt retry loop."""
     for attempt in range(3):
         try:
             return sheet.get_all_values()
@@ -57,38 +56,30 @@ def get_fresh_data(sheet):
 def process_sales_data(data, start_time, end_time=None):
     try:
         if not data or len(data) < 2: return [] 
-        
         df = pd.DataFrame(data[1:], columns=data[0])
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         df = df.dropna(subset=['timestamp'])
-        
         if df['timestamp'].dt.tz is None:
             df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
         else:
             df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
-            
         dedup_threshold = datetime(2026, 4, 1, tzinfo=timezone.utc)
-        
         legacy_df = df[df['timestamp'] < dedup_threshold].copy()
         current_df = df[df['timestamp'] >= dedup_threshold].copy()
-        
         current_df = current_df.drop_duplicates(subset=[df.columns[0]], keep='first')
         final_df = pd.concat([legacy_df, current_df])
-        
         cutoff = end_time if end_time else datetime.now(timezone.utc) + timedelta(days=1)
         mask = (final_df['timestamp'] >= start_time) & (final_df['timestamp'] < cutoff)
         filtered_df = final_df[mask].copy()
-
         if not filtered_df.empty:
             filtered_df['sort_name'] = filtered_df.iloc[:, 2].astype(str).apply(lambda x: x.split()[-1] if x.split() else "")
             filtered_df = filtered_df.sort_values(by='sort_name', ascending=True)
-
         return filtered_df.to_dict('records')
     except Exception as e:
         st.error(f"Data Processing Error: {e}")
         return []
 
-# --- 4. STARTUP UI (Unlocks Audio on iPad) ---
+# --- 4. STARTUP UI ---
 if 'dashboard_started' not in st.session_state:
     st.session_state.dashboard_started = False
 
@@ -100,14 +91,22 @@ if not st.session_state.dashboard_started:
         if st.button("Start Dashboard", use_container_width=True):
             st.session_state.dashboard_started = True
             st.rerun()
-    st.stop() # Halts execution until the user taps the button
+    st.stop()
 
-# --- 5. NATIVE AUTO-REFRESH & MAIN UI ---
+# --- 5. STYLE & LAYOUT OVERRIDES ---
+# This block forces Streamlit to use the FULL screen width and removes the 1200px cap.
 st.markdown("""
     <style>
+        /* Force wide layout beyond standard Streamlit limits */
+        .block-container {
+            max-width: 95% !important;
+            padding-top: 2rem !important;
+            padding-bottom: 0rem !important;
+        }
         .stProgress > div > div > div > div {
             background-color: #39FF14;
-            box-shadow: 0 0 10px #39FF14;
+            box-shadow: 0 0 20px #39FF14;
+            height: 30px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -116,19 +115,18 @@ st.markdown("""
 current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
 refresh_seconds = 120 if 4 <= current_hour < 18 else 600 
 
-# Streamlit's native fragment handles the loop safely without breaking iOS WebSockets
+# --- 6. MAIN DASHBOARD FRAGMENT ---
 @st.fragment(run_every=refresh_seconds)
 def render_live_dashboard():
     if 'last_count' not in st.session_state: st.session_state.last_count = 0
 
     client = get_gspread_client()
     if not client:
-        st.error("Google Auth Failed. Please check service account credentials.")
+        st.error("Google Auth Failed.")
         return
 
     try:
         sheet = client.open(SHEET_NAME).sheet1
-        
         now_utc = datetime.now(timezone.utc)
         if now_utc.hour >= 4:
             curr_start = now_utc.replace(hour=4, minute=0, second=0, microsecond=0)
@@ -138,11 +136,10 @@ def render_live_dashboard():
         prev_start = curr_start - timedelta(days=1)
         prev_end = curr_start
 
-        # Fetch fresh data (The fragment timer replaces our old manual cache logic)
         try:
             all_data = get_fresh_data(sheet)
-        except Exception as e:
-            st.warning("Brief connection drop to Google. Retrying next cycle...")
+        except:
+            st.warning("Google Syncing...")
             return
 
         current_sales = process_sales_data(all_data, curr_start)
@@ -151,45 +148,49 @@ def render_live_dashboard():
         display_count = len(current_sales)
         count_prev = len(previous_sales)
 
-        # CELEBRATION LOGIC
         if display_count > st.session_state.last_count and st.session_state.last_count > 0:
             if display_count >= DAILY_GOAL:
                 st.balloons()
                 trigger_sound("champions.mp3")
             else:
                 trigger_sound("cha-ching.mp3")
-                
         st.session_state.last_count = display_count
 
-        # RENDERING
-        st.markdown('<p style="font-size:40px; text-align:center; color:#5D9CEC; font-weight:bold; margin-bottom:-20px;">CONVERSIONS TODAY</p>', unsafe_allow_html=True)
-        st.markdown(f'<p style="font-size:20vw; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{display_count}</p>', unsafe_allow_html=True)
+        # --- THE MASSIVE TEXT SECTION ---
+        # Label: Increased to 5vw
+        st.markdown(f'<p style="font-size:5vw; text-align:center; color:#5D9CEC; font-weight:bold; margin-bottom:-4vw;">CONVERSIONS TODAY</p>', unsafe_allow_html=True)
         
+        # Count: Increased to 35vw (roughly 35% of monitor width)
+        st.markdown(f'<p style="font-size:35vw; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{display_count}</p>', unsafe_allow_html=True)
+        
+        # Goal Progress: Slightly bigger
         progress_val = min(float(display_count) / float(DAILY_GOAL), 1.0)
         st.progress(progress_val)
-        st.markdown(f"<center><b style='color:#39FF14; font-size:25px;'>Goal Progress: {display_count}/{DAILY_GOAL}</b></center>", unsafe_allow_html=True)
+        st.markdown(f"<center><b style='color:#39FF14; font-size:3vw;'>Goal Progress: {display_count} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
         
-        st.markdown(f'<p style="font-size:45px; color:#888888; text-align:center; font-weight:bold; margin-bottom:0;">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
+        # Stats & Timestamp
+        st.markdown(f'<p style="font-size:4vw; color:#888888; text-align:center; font-weight:bold; margin-top:2vw;">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
         
         now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
-        st.markdown(f'<p style="font-size:16px; text-align:center; color:#666666; margin-top:0;">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
+        st.markdown(f'<p style="font-size:1.5vw; text-align:center; color:#666666;">Last Updated: {now_est} EST</p>', unsafe_allow_html=True)
 
         st.divider()
         
+        # Sales Lists
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("<h3 style='color: white;'>New Sales:</h3>", unsafe_allow_html=True)
+            st.markdown("<h2 style='color: white; font-size: 3vw;'>New Sales:</h2>", unsafe_allow_html=True)
             for s in current_sales: 
                 name_val = s.get(list(s.keys())[2], 'Unknown')
-                st.markdown(f"<span style='color: white;'>✔ {name_val}</span>", unsafe_allow_html=True)
+                st.markdown(f"<p style='color: white; font-size: 2vw; margin:0;'>✔ {name_val}</p>", unsafe_allow_html=True)
         with c2:
-            st.markdown("<h3 style='color: #888888;'>Yesterday's Sales:</h3>", unsafe_allow_html=True)
+            st.markdown("<h2 style='color: #888888; font-size: 3vw;'>Yesterday:</h2>", unsafe_allow_html=True)
             for s in previous_sales: 
                 name_val = s.get(list(s.keys())[2], 'Unknown')
-                st.markdown(f"<span style='color: #888888;'>• {name_val}</span>", unsafe_allow_html=True)
+                st.markdown(f"<p style='color: #888888; font-size: 2vw; margin:0;'>• {name_val}</p>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Display Error: {e}")
 
-# Call the fragment function to start the loop
+# Start the dashboard
 render_live_dashboard()
