@@ -6,9 +6,7 @@ from datetime import datetime, timedelta, timezone
 import time
 import json
 import os
-import requests
 import base64
-from streamlit_autorefresh import st_autorefresh # <-- NEW: Required for stable iOS refreshing
 
 # --- 0. PAGE CONFIG MUST BE FIRST ---
 st.set_page_config(layout="wide", page_title="Sales Dashboard")
@@ -46,17 +44,15 @@ def trigger_sound(file_path):
     if b64:
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
-# --- 3. DATA FETCHING (MANUAL CACHE) ---
+# --- 3. DATA FETCHING ---
 def get_fresh_data(sheet):
     """Fetches sheet data with a 3-attempt retry loop."""
     for attempt in range(3):
         try:
             return sheet.get_all_values()
         except Exception as e:
-            if attempt < 2:
-                time.sleep(2)
-            else:
-                raise e
+            if attempt < 2: time.sleep(2)
+            else: raise e
 
 def process_sales_data(data, start_time, end_time=None):
     try:
@@ -106,29 +102,31 @@ if not st.session_state.dashboard_started:
             st.rerun()
     st.stop() # Halts execution until the user taps the button
 
-# --- 5. DYNAMIC REFRESH SCHEDULING (Frontend Safe) ---
-current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
-# 120,000 ms = 2 mins, 600,000 ms = 10 mins
-refresh_interval = 120000 if 4 <= current_hour < 18 else 600000 
-st_autorefresh(interval=refresh_interval, key="sales_dashboard_refresh")
-
-# --- 6. MAIN UI ---
+# --- 5. NATIVE AUTO-REFRESH & MAIN UI ---
 st.markdown("""
     <style>
         .stProgress > div > div > div > div {
             background-color: #39FF14;
             box-shadow: 0 0 10px #39FF14;
         }
-        /* body background-color removed here to prevent layout breaks on Safari */
     </style>
     """, unsafe_allow_html=True)
 
-if 'last_count' not in st.session_state: st.session_state.last_count = 0
+# Determine the refresh rate based on the time of day
+current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
+refresh_seconds = 120 if 4 <= current_hour < 18 else 600 
 
-client = get_gspread_client()
-if client:
+# Streamlit's native fragment handles the loop safely without breaking iOS WebSockets
+@st.fragment(run_every=refresh_seconds)
+def render_live_dashboard():
+    if 'last_count' not in st.session_state: st.session_state.last_count = 0
+
+    client = get_gspread_client()
+    if not client:
+        st.error("Google Auth Failed. Please check service account credentials.")
+        return
+
     try:
-        # Step A: Get sheet
         sheet = client.open(SHEET_NAME).sheet1
         
         now_utc = datetime.now(timezone.utc)
@@ -140,26 +138,12 @@ if client:
         prev_start = curr_start - timedelta(days=1)
         prev_end = curr_start
 
-        # Step B: Manual 120-second Cache Enforcement
-        current_time = time.time()
-        needs_refresh = True
-        
-        if 'cached_sheet_data' in st.session_state and 'last_fetch_time' in st.session_state:
-            if current_time - st.session_state.last_fetch_time < 120:
-                needs_refresh = False
-
-        if needs_refresh:
-            try:
-                st.session_state.cached_sheet_data = get_fresh_data(sheet)
-                st.session_state.last_fetch_time = current_time
-            except Exception as e:
-                if 'cached_sheet_data' not in st.session_state:
-                    st.error(f"Google API is down. Retrying... (Error: {e})")
-                    time.sleep(5)
-                    st.rerun()
-
-        # Step C: Use the securely cached data
-        all_data = st.session_state.cached_sheet_data
+        # Fetch fresh data (The fragment timer replaces our old manual cache logic)
+        try:
+            all_data = get_fresh_data(sheet)
+        except Exception as e:
+            st.warning("Brief connection drop to Google. Retrying next cycle...")
+            return
 
         current_sales = process_sales_data(all_data, curr_start)
         previous_sales = process_sales_data(all_data, prev_start, prev_end)
@@ -179,8 +163,6 @@ if client:
 
         # RENDERING
         st.markdown('<p style="font-size:40px; text-align:center; color:#5D9CEC; font-weight:bold; margin-bottom:-20px;">CONVERSIONS TODAY</p>', unsafe_allow_html=True)
-        
-        # <-- NEW: Using 20vw instead of 350px so it scales perfectly on iPads and external screens
         st.markdown(f'<p style="font-size:20vw; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{display_count}</p>', unsafe_allow_html=True)
         
         progress_val = min(float(display_count) / float(DAILY_GOAL), 1.0)
@@ -208,5 +190,6 @@ if client:
 
     except Exception as e:
         st.error(f"Display Error: {e}")
-else:
-    st.error("Google Auth Failed. Please check service account credentials.")
+
+# Call the fragment function to start the loop
+render_live_dashboard()
