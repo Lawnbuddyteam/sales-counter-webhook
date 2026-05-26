@@ -8,6 +8,7 @@ import json
 import os
 import requests
 import base64
+from streamlit_autorefresh import st_autorefresh # <-- NEW: Required for stable iOS refreshing
 
 # --- 0. PAGE CONFIG MUST BE FIRST ---
 st.set_page_config(layout="wide", page_title="Sales Dashboard")
@@ -19,7 +20,6 @@ LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
 
 # --- 2. AUTH & AUDIO ---
-# Refresh the Google auth token every 30 mins to prevent silent token expiration
 @st.cache_resource(ttl=1800)
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -92,16 +92,34 @@ def process_sales_data(data, start_time, end_time=None):
         st.error(f"Data Processing Error: {e}")
         return []
 
-# --- 4. MAIN UI ---
+# --- 4. STARTUP UI (Unlocks Audio on iPad) ---
+if 'dashboard_started' not in st.session_state:
+    st.session_state.dashboard_started = False
+
+if not st.session_state.dashboard_started:
+    st.markdown("<h1 style='text-align: center; margin-top: 20vh; color: white;'>Sales Dashboard Ready</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888;'>Tap the button below on the iPad to unlock audio autoplay permissions.</p>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("Start Dashboard", use_container_width=True):
+            st.session_state.dashboard_started = True
+            st.rerun()
+    st.stop() # Halts execution until the user taps the button
+
+# --- 5. DYNAMIC REFRESH SCHEDULING (Frontend Safe) ---
+current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
+# 120,000 ms = 2 mins, 600,000 ms = 10 mins
+refresh_interval = 120000 if 4 <= current_hour < 18 else 600000 
+st_autorefresh(interval=refresh_interval, key="sales_dashboard_refresh")
+
+# --- 6. MAIN UI ---
 st.markdown("""
     <style>
         .stProgress > div > div > div > div {
             background-color: #39FF14;
             box-shadow: 0 0 10px #39FF14;
         }
-        body {
-            background-color: #0E1117;
-        }
+        /* body background-color removed here to prevent layout breaks on Safari */
     </style>
     """, unsafe_allow_html=True)
 
@@ -127,7 +145,6 @@ if client:
         needs_refresh = True
         
         if 'cached_sheet_data' in st.session_state and 'last_fetch_time' in st.session_state:
-            # If less than 120 seconds have passed, skip the API call
             if current_time - st.session_state.last_fetch_time < 120:
                 needs_refresh = False
 
@@ -137,7 +154,7 @@ if client:
                 st.session_state.last_fetch_time = current_time
             except Exception as e:
                 if 'cached_sheet_data' not in st.session_state:
-                    st.error(f"Google API is down. Retrying in 5 seconds... (Error: {e})")
+                    st.error(f"Google API is down. Retrying... (Error: {e})")
                     time.sleep(5)
                     st.rerun()
 
@@ -162,7 +179,9 @@ if client:
 
         # RENDERING
         st.markdown('<p style="font-size:40px; text-align:center; color:#5D9CEC; font-weight:bold; margin-bottom:-20px;">CONVERSIONS TODAY</p>', unsafe_allow_html=True)
-        st.markdown(f'<p style="font-size:350px; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{display_count}</p>', unsafe_allow_html=True)
+        
+        # <-- NEW: Using 20vw instead of 350px so it scales perfectly on iPads and external screens
+        st.markdown(f'<p style="font-size:20vw; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{display_count}</p>', unsafe_allow_html=True)
         
         progress_val = min(float(display_count) / float(DAILY_GOAL), 1.0)
         st.progress(progress_val)
@@ -191,14 +210,3 @@ if client:
         st.error(f"Display Error: {e}")
 else:
     st.error("Google Auth Failed. Please check service account credentials.")
-
-# --- 5. DYNAMIC REFRESH SCHEDULING ---
-current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
-
-if 4 <= current_hour < 18:
-    sleep_seconds = 120
-else:
-    sleep_seconds = 600
-
-time.sleep(sleep_seconds)
-st.rerun()
