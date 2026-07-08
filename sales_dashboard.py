@@ -40,9 +40,11 @@ def get_audio_base64(file_path):
     except: return None
 
 def trigger_sound(file_path):
-    b64 = get_audio_base64(file_path)
-    if b64:
-        st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
+    # Only play sound if user interaction has unlocked audio permissions for this browser session
+    if st.session_state.get("audio_unlocked", False):
+        b64 = get_audio_base64(file_path)
+        if b64:
+            st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
 
 # --- 3. DATA FETCHING ---
 def get_fresh_data(sheet):
@@ -79,25 +81,41 @@ def process_sales_data(data, start_time, end_time=None):
         st.error(f"Data Processing Error: {e}")
         return []
 
-# --- 4. STARTUP UI ---
-if 'dashboard_started' not in st.session_state:
-    st.session_state.dashboard_started = False
+# --- 4. STARTUP UI & PERSISTENCE ---
+current_hour_est = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
+is_overnight = (current_hour_est >= 22) or (current_hour_est < 4) # 10 PM to 4 AM EST
 
-if not st.session_state.dashboard_started:
+# If it's overnight, purge the URL flag so it forces a fresh click tomorrow morning
+if is_overnight and "started" in st.query_params:
+    del st.query_params["started"]
+
+# Check if the URL remembers that we already started today
+has_persistent_start = st.query_params.get("started") == "true"
+
+if not has_persistent_start:
     st.markdown("<h1 style='text-align: center; margin-top: 20vh; color: white;'>Sales Dashboard Ready</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; color: #888;'>Tap the button below on the iPad to unlock audio autoplay permissions.</p>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         if st.button("Start Dashboard", use_container_width=True):
-            st.session_state.dashboard_started = True
+            st.query_params["started"] = "true"
+            st.session_state.audio_unlocked = True
             st.rerun()
     st.stop()
 
+# Auto-recovery audio handler for daytime disconnects
+if "audio_unlocked" not in st.session_state:
+    st.session_state.audio_unlocked = False
+
+if not st.session_state.audio_unlocked:
+    st.warning("⚠️ Dashboard auto-recovered from a network drop. Audio alerts are currently muted by iOS.")
+    if st.button("🔊 Tap here to re-enable audio alerts", use_container_width=True):
+        st.session_state.audio_unlocked = True
+        st.rerun()
+
 # --- 5. STYLE & LAYOUT OVERRIDES ---
-# This block forces Streamlit to use the FULL screen width and removes the 1200px cap.
 st.markdown("""
     <style>
-        /* Force wide layout beyond standard Streamlit limits */
         .block-container {
             max-width: 95% !important;
             padding-top: 2rem !important;
@@ -112,8 +130,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Determine the refresh rate based on the time of day
-current_hour = (datetime.now(timezone.utc) - timedelta(hours=4)).hour
-refresh_seconds = 120 if 4 <= current_hour < 18 else 600 
+refresh_seconds = 120 if 4 <= current_hour_est < 18 else 600 
 
 # --- 6. MAIN DASHBOARD FRAGMENT ---
 @st.fragment(run_every=refresh_seconds)
@@ -157,18 +174,13 @@ def render_live_dashboard():
         st.session_state.last_count = display_count
 
         # --- THE MASSIVE TEXT SECTION ---
-        # Label: Increased to 5vw
         st.markdown(f'<p style="font-size:5vw; text-align:center; color:#5D9CEC; font-weight:bold; margin-bottom:-4vw;">CONVERSIONS TODAY</p>', unsafe_allow_html=True)
-        
-        # Count: Increased to 35vw (roughly 35% of monitor width)
         st.markdown(f'<p style="font-size:35vw; text-align:center; color:white; font-weight:900; line-height:0.8; margin:0;">{display_count}</p>', unsafe_allow_html=True)
         
-        # Goal Progress: Slightly bigger
         progress_val = min(float(display_count) / float(DAILY_GOAL), 1.0)
         st.progress(progress_val)
         st.markdown(f"<center><b style='color:#39FF14; font-size:3vw;'>Goal Progress: {display_count} / {DAILY_GOAL}</b></center>", unsafe_allow_html=True)
         
-        # Stats & Timestamp
         st.markdown(f'<p style="font-size:4vw; color:#888888; text-align:center; font-weight:bold; margin-top:2vw;">Yesterday: {count_prev}</p>', unsafe_allow_html=True)
         
         now_est = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime('%I:%M:%S %p')
@@ -176,7 +188,6 @@ def render_live_dashboard():
 
         st.divider()
         
-        # Sales Lists
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("<h2 style='color: white; font-size: 3vw;'>New Sales:</h2>", unsafe_allow_html=True)
