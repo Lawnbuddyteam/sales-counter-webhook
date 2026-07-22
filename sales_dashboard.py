@@ -12,7 +12,7 @@ import base64
 st.set_page_config(layout="wide", page_title="Sales Dashboard")
 
 # --- 1. CONFIGURATION ---
-DAILY_GOAL = 90
+DAILY_GOAL = 15
 SHEET_NAME = "Sales_Counter" 
 LOCATION_ID = "snQISHLOuYGlR3jXbGU3"
 GHL_API_KEY = os.environ.get('GHL_API_KEY')
